@@ -1,0 +1,273 @@
+import tensorflow as tf
+import numpy as np
+
+from helpers import safe_exp
+from bleu import compute_bleu
+from tensorflow.python.layers import core as layers_core
+
+
+class CVAE(object):
+    def __init__(self,
+                 vocab_size,
+                 embed_size,
+                 num_unit,
+                 latent_dim,
+                 batch_size,
+                 start_i=1,
+                 end_i=2,
+                 beam_width=5,
+                 maximum_iterations=50,
+                 max_gradient_norm=5,
+                 lr=1e-3,
+                 dropout=0.2,
+                 num_layer=1,
+                 num_gpu=2,
+                 cell_type=tf.nn.rnn_cell.GRUCell):
+        self.end_i = end_i
+
+        self.num_layer = num_layer
+        self.num_gpu = num_gpu
+
+        self.num_unit = num_unit
+        self.dropout = dropout
+
+        self.emoji = tf.placeholder(tf.int32, shape=[None], name="emoji")
+        self.ori = tf.placeholder(tf.int32, shape=[None, None], name="original_tweet")  # [len, batch_size]
+        self.ori_len = tf.placeholder(tf.int32, shape=[None], name="original_tweet_length")
+        self.rep = tf.placeholder(tf.int32, shape=[None, None], name="response_tweet")
+        self.rep_len = tf.placeholder(tf.int32, shape=[None], name="response_tweet_length")
+        self.rep_input = tf.placeholder(tf.int32, shape=[None, None], name="response_start_tag")
+        self.rep_output = tf.placeholder(tf.int32, shape=[None, None], name="response_end_tag")
+
+        self.kl_weight = tf.placeholder(tf.float32, shape=(), name="kl_weight")
+
+        self.placeholders = [
+            self.emoji,
+            self.ori, self.ori_len,
+            self.rep, self.rep_len, self.rep_input, self.rep_output,
+            self.kl_weight
+        ]
+
+        with tf.variable_scope("embeddings"):
+            # TODO: init from embedding
+            self.embedding = tf.Variable(
+                tf.random_normal([vocab_size, embed_size], - 0.5 / embed_size, 0.5 / embed_size), name='word_embedding',
+                dtype=tf.float32)
+            self.ori_emb = tf.nn.embedding_lookup(self.embedding, self.ori)  # [max_len, batch_size, embedding_size]
+            self.rep_emb = tf.nn.embedding_lookup(self.embedding, self.rep)
+
+            self.rep_input_emb = tf.nn.embedding_lookup(self.embedding, self.rep_input)
+
+            self.emoji_emb = tf.nn.embedding_lookup(self.embedding, self.emoji)  # [batch_size, embedding_size]
+
+        with tf.variable_scope("original_tweet_encoder"):
+            ori_encoder_state = self.build_bidirectional_rnn(
+                self.ori_emb, self.ori_len, dtype=tf.float32)
+            self.ori_encoder_state = self.flatten(ori_encoder_state)
+
+        with tf.variable_scope("response_tweet_encoder"):
+            rep_encoder_state = self.build_bidirectional_rnn(
+                self.rep_emb, self.rep_len, dtype=tf.float32)
+            self.rep_encoder_state = self.flatten(rep_encoder_state)
+
+        self.condition = tf.concat([self.ori_encoder_state, self.emoji_emb], axis=1, name="condition")
+
+        with tf.variable_scope("param_Gaussian"):
+            dense_input = tf.concat([self.rep_encoder_state, self.condition], axis=1)
+            self.mu = tf.layers.dense(
+                dense_input, latent_dim, name="mean")
+            self.log_var = tf.layers.dense(
+                dense_input, latent_dim, name="log_variance")
+
+        with tf.variable_scope("reparameterization"):
+            self.z_sample = self.mu + tf.exp(self.log_var / 2.) * tf.random_normal(shape=tf.shape(self.mu))
+
+        with tf.variable_scope("decoder_train") as decoder_scope:
+            self.decoder_initial_state = tf.concat([self.z_sample, self.condition], axis=1)
+            self.decoder_cell = cell_type(latent_dim + 2 * num_layer * num_unit + embed_size)
+            helper = tf.contrib.seq2seq.TrainingHelper(
+                self.rep_input_emb, self.rep_len + 1, time_major=True)
+            self.projection_layer = layers_core.Dense(
+                vocab_size, use_bias=False, name="output_projection")
+            decoder = tf.contrib.seq2seq.BasicDecoder(
+                self.decoder_cell, helper, self.decoder_initial_state,
+                output_layer=self.projection_layer)
+            self.outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+                decoder,
+                output_time_major=True,
+                swap_memory=True,
+                scope=decoder_scope
+            )
+            self.logits = self.outputs.rnn_output
+
+        with tf.variable_scope("decoder_infer") as decoder_scope:
+            # Replicate encoder infos beam_width times
+            self.normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
+            self.decoder_initial_state = tf.concat([self.normal_sample, self.condition], axis=1)
+            self.decoder_initial_state = tf.contrib.seq2seq.tile_batch(
+                self.decoder_initial_state, multiplier=beam_width)
+
+            start_tokens = tf.fill([batch_size], start_i)
+            end_token = end_i
+            # Define a beam-search decoder
+            decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+                cell=self.decoder_cell,
+                embedding=self.embedding,
+                start_tokens=start_tokens,
+                end_token=end_token,
+                initial_state=self.decoder_initial_state,
+                beam_width=beam_width,
+                output_layer=self.projection_layer,
+                length_penalty_weight=0.0)
+
+            # Dynamic decoding
+            outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+                decoder,
+                maximum_iterations=maximum_iterations,
+                output_time_major=True,
+                swap_memory=True,
+                scope=decoder_scope
+            )
+            self.result = outputs.predicted_ids
+            # result = tf.transpose(result, [1, 2, 0])
+
+        with tf.variable_scope("loss"):
+            with tf.variable_scope("reconstruction"):
+                max_time = tf.shape(self.rep_output)[0]
+                # TODO: check if loss calculation correct! need SCRUTINY into its shape
+                cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
+                    labels=self.rep_output, logits=self.logits)
+                # rep: [len, batch_size]; logits: [len, batch_size, vocab_size]
+                target_mask = tf.sequence_mask(
+                    self.rep_len + 1, max_time, dtype=self.logits.dtype)
+                # time_major
+                target_mask = tf.transpose(target_mask)
+                self.recon_loss = tf.reduce_mean(tf.reduce_sum(cross_entropy * target_mask, axis=0))
+
+            with tf.variable_scope("latent"):
+                self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
+
+            # with tf.variable_scope("bow"):
+            #     self.rep_emb
+            #     self.rep_len
+            #
+            #
+            #     mlp_input = tf.concat([self.z_sample, ])
+
+            self.recon_loss = tf.reduce_mean(self.recon_loss)
+            self.kl_loss = tf.reduce_mean(self.kl_loss)
+            self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight)
+
+        # Calculate and clip gradients
+        with tf.variable_scope("optimization"):
+            params = tf.trainable_variables()
+            gradients = tf.gradients(self.loss, params)
+            clipped_gradients, _ = tf.clip_by_global_norm(
+                gradients, max_gradient_norm)
+
+            # Optimization
+            optimizer = tf.train.AdamOptimizer(lr)
+            self.update_step = optimizer.apply_gradients(
+                zip(clipped_gradients, params))
+
+    def infer_and_eval(self, batches, batch_size, sess):
+        sess = sess or sess.get_default_session()
+
+        # inference
+        reference_corpus = []
+        generation_corpus = []
+
+        # ppl
+        loss_l = []
+        word_count = 0
+        total_recon_loss = 0
+        total_kl_loss = 0
+
+        for batch in batches:
+            feed_dict = dict(zip(self.placeholders, batch))
+            feed_dict[self.kl_weight] = 1.
+
+            recon_loss, kl_loss = sess.run([self.recon_loss, self.kl_loss], feed_dict=feed_dict)
+            loss_l.append(recon_loss)
+            total_recon_loss += recon_loss * batch_size
+            total_kl_loss += kl_loss * batch_size
+
+            # only emoji and original tweet needed. need to get rid of the magic number
+            feed_dict = dict(zip(self.placeholders[0:3], batch[0:3]))
+            gen_digits = sess.run([self.result], feed_dict=feed_dict)[0]  # [time, batch_sz, beam_wd]
+
+            rep_m = batch[3]
+            rep_len = batch[4]
+            for i, leng in enumerate(rep_len):
+                word_count += leng
+                ref = list(rep_m[0:leng, i])
+                reference_corpus.append([ref])
+
+                out = []
+                for digit in gen_digits[:, i, 0]:
+                    if digit == self.end_i:
+                        break
+                    out.append(digit)
+                generation_corpus.append(out)
+
+        total_recon_loss = np.mean(loss_l)
+        perplexity = safe_exp(total_recon_loss / word_count)
+
+        bleu_score, precisions, bp, ratio, translation_length, reference_length = compute_bleu(
+            reference_corpus, generation_corpus)
+        for i in range(len(precisions)):
+            precisions[i] *= 100
+
+        return total_recon_loss, total_kl_loss, perplexity, bleu_score * 100, precisions, generation_corpus
+
+    def train_update(self, batch, sess, weight):
+        sess = sess or sess.get_default_session()
+        feed_dict = dict(zip(self.placeholders, batch))
+        feed_dict[self.kl_weight] = weight
+
+        _, recon_loss, kl_loss = sess.run(
+            [self.update_step, self.recon_loss, self.kl_loss], feed_dict=feed_dict)
+        return recon_loss, kl_loss
+
+    def flatten(self, ori_encoder_state):
+
+        if self.num_layer == 1:
+            rtn = tf.concat(
+                [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
+        else:  # TODO: all the layers needed?
+            rtn = tf.concat([ori_encoder_state[0][0], ori_encoder_state[1][0]], axis=1)
+            for i in range(1, self.num_layer):
+                rtn = tf.concat([rtn, ori_encoder_state[0][i]], axis=1)
+                rtn = tf.concat([rtn, ori_encoder_state[1][i]], axis=1)
+        return rtn
+
+    def build_bidirectional_rnn(self, inputs, sequence_length, dtype, base_gpu=0):
+        # Construct forward and backward cells
+        fw_cell = self.create_rnn_cell(base_gpu)
+        bw_cell = self.create_rnn_cell((base_gpu + self.num_layer))
+
+        _, bi_state = tf.nn.bidirectional_dynamic_rnn(
+            fw_cell,
+            bw_cell,
+            inputs,
+            dtype=dtype,
+            sequence_length=sequence_length,
+            time_major=True)
+
+        return bi_state
+
+    def create_rnn_cell(self, base_gpu):
+        # Multi-GPU
+        cell_list = []
+        for i in range(self.num_layer):
+            # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
+            device_str = "/gpu:%d" % (i + base_gpu % self.num_gpu)
+            single_cell = tf.contrib.rnn.GRUCell(self.num_unit)
+            single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
+            single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
+            cell_list.append(single_cell)
+
+        if len(cell_list) == 1:  # Single layer.
+            return cell_list[0]
+        else:  # Multi layers
+            return tf.contrib.rnn.MultiRNNCell(cell_list)
