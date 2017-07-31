@@ -31,13 +31,13 @@ class CVAE(object):
         self.num_unit = num_unit
         self.dropout = dropout
 
-        self.emoji = tf.placeholder(tf.int32, shape=[None], name="emoji")
-        self.ori = tf.placeholder(tf.int32, shape=[None, None], name="original_tweet")  # [len, batch_size]
-        self.ori_len = tf.placeholder(tf.int32, shape=[None], name="original_tweet_length")
-        self.rep = tf.placeholder(tf.int32, shape=[None, None], name="response_tweet")
-        self.rep_len = tf.placeholder(tf.int32, shape=[None], name="response_tweet_length")
-        self.rep_input = tf.placeholder(tf.int32, shape=[None, None], name="response_start_tag")
-        self.rep_output = tf.placeholder(tf.int32, shape=[None, None], name="response_end_tag")
+        self.emoji = tf.placeholder(tf.int32, shape=[batch_size], name="emoji")
+        self.ori = tf.placeholder(tf.int32, shape=[None, batch_size], name="original_tweet")  # [len, batch_size]
+        self.ori_len = tf.placeholder(tf.int32, shape=[batch_size], name="original_tweet_length")
+        self.rep = tf.placeholder(tf.int32, shape=[None, batch_size], name="response_tweet")
+        self.rep_len = tf.placeholder(tf.int32, shape=[batch_size], name="response_tweet_length")
+        self.rep_input = tf.placeholder(tf.int32, shape=[None, batch_size], name="response_start_tag")
+        self.rep_output = tf.placeholder(tf.int32, shape=[None, batch_size], name="response_end_tag")
 
         self.kl_weight = tf.placeholder(tf.float32, shape=(), name="kl_weight")
 
@@ -57,6 +57,7 @@ class CVAE(object):
             self.rep_emb = tf.nn.embedding_lookup(self.embedding, self.rep)
 
             self.rep_input_emb = tf.nn.embedding_lookup(self.embedding, self.rep_input)
+            self.rep_output_emb = tf.nn.embedding_lookup(self.embedding, self.rep_output)
 
             self.emoji_emb = tf.nn.embedding_lookup(self.embedding, self.emoji)  # [batch_size, embedding_size]
 
@@ -141,22 +142,46 @@ class CVAE(object):
                 target_mask = tf.sequence_mask(
                     self.rep_len + 1, max_time, dtype=self.logits.dtype)
                 # time_major
-                target_mask = tf.transpose(target_mask)
-                self.recon_loss = tf.reduce_mean(tf.reduce_sum(cross_entropy * target_mask, axis=0))
+                target_mask_t = tf.transpose(target_mask)
+                # self.recon_loss = tf.reduce_mean(tf.reduce_sum(cross_entropy * target_mask_t, axis=0))
+                self.recon_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
             with tf.variable_scope("latent"):
                 self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
+                self.kl_loss = tf.reduce_mean(self.kl_loss)
 
-            # with tf.variable_scope("bow"):
-            #     self.rep_emb
-            #     self.rep_len
-            #
-            #
-            #     mlp_input = tf.concat([self.z_sample, ])
+            with tf.variable_scope("bow"):
+                all_words = [i for i in range(vocab_size)]
+                all_words.remove(start_i)
+                self.all_emb = tf.nn.embedding_lookup(self.embedding, all_words)
 
-            self.recon_loss = tf.reduce_mean(self.recon_loss)
-            self.kl_loss = tf.reduce_mean(self.kl_loss)
-            self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight)
+                def handle_word_func(latent):
+                    # loop over words
+                    def handle_word(word):
+                        x = tf.concat([word, latent], axis=0)
+                        x = tf.expand_dims(x, 0)    # why this dimension works
+                        return tf.squeeze(tf.layers.dense(x, 1, activation=tf.nn.softmax))
+                    return handle_word
+
+                # loop over tweets
+                def handle_sentence(inp):
+                    sentence, latent = inp
+                    func = handle_word_func(latent)
+
+                    all_mapped = tf.map_fn(func, self.all_emb, swap_memory=True)
+                    denominator = tf.reduce_sum(tf.exp(all_mapped))
+
+                    rep_mapped = tf.map_fn(func, sentence, swap_memory=True)
+
+                    return rep_mapped - tf.log(denominator), denominator
+
+                rep_t = tf.transpose(self.rep_output_emb, [1, 0, 2])
+                all_rep_mapped, _ = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
+                numerators = tf.reduce_sum(all_rep_mapped * target_mask, 1)  # mask (not time-major)
+
+                self.bow_loss = tf.reduce_mean(numerators)
+
+            self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight + self.bow_loss)
 
         # Calculate and clip gradients
         with tf.variable_scope("optimization"):
