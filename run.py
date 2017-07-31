@@ -15,10 +15,10 @@ from os.path import join, dirname, isfile
 
 from math import tanh
 
-def put_eval(recon_loss, kl_loss, ppl, bleu_score, precisions_list, name):
+def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name):
     print("%s: " % name, end="")
-    format_string = '\tloss/ppl: recon-%.3f,kl-%.3f / %.3f BLEU:' + ' %.1f' * 5
-    format_tuple = (recon_loss, kl_loss, ppl, bleu_score) + tuple(precisions_list)
+    format_string = '\trecon/kl/bow-loss/ppl:\t%.3f\t%.3f\t%.3f\t%.3f\tBLEU:' + '\t%.1f' * 5
+    format_tuple = (recon_loss, kl_loss, bow_loss, ppl, bleu_score) + tuple(precisions_list)
     print(format_string % format_tuple)
 
 def write_out(file, corpus):
@@ -84,22 +84,26 @@ if __name__ == '__main__':
             for batch in train_batches:
                 """ TRAIN """
                 kl_weight = get_kl_weight(global_step, total_step, anneal_ratio)
-                recon_loss, kl_loss = cvae.train_update(batch, sess, kl_weight)
+                recon_loss, kl_loss, bow_loss = cvae.train_update(batch, sess, kl_weight)
 
                 if global_step % test_step == 0:
-                    print(
-                        'Epoch: %d Step: %d Batch-loss: recon-%.3f,kl-%.3f' % (epoch, global_step, recon_loss, kl_loss))
+                    print('Epoch: %d Step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f' %
+                          (epoch, global_step, recon_loss, kl_loss, bow_loss))
 
                     """ BATCH EVAL and INFER """
                     # TRAIN
-                    train_recon_loss, train_kl_loss, perplexity, train_bleu_score, precisions, _ = cvae.infer_and_eval(
-                        train_batches, batch_size, sess)
-                    put_eval(train_recon_loss, train_kl_loss, perplexity, train_bleu_score, precisions, "TRAIN")
+                    (train_recon_loss, train_kl_loss, train_bow_loss,
+                     perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
+                    put_eval(
+                        train_recon_loss, train_kl_loss, train_bow_loss,
+                        perplexity, train_bleu_score, precisions, "TRAIN")
 
                     # TEST
-                    test_recon_loss, test_kl_loss, perplexity, test_bleu_score, precisions, _ = cvae.infer_and_eval(
-                        test_batches, batch_size, sess)
-                    put_eval(test_recon_loss, test_kl_loss, perplexity, test_bleu_score, precisions, "TEST")
+                    (test_recon_loss, test_kl_loss, test_bow_loss,
+                     perplexity, test_bleu_score, precisions, _) = cvae.infer_and_eval(test_batches, sess)
+                    put_eval(
+                        test_recon_loss, test_kl_loss, test_bow_loss,
+                        perplexity, test_bleu_score, precisions, "TEST")
 
                     # get down best
                     # if test_bleu_score >= best_bleu:
@@ -124,9 +128,9 @@ if __name__ == '__main__':
         # TRAIN
         train_batches = batch_generator(
             train_data, start_i, end_i, batch_size, permutate=False)
-        generation_corpus = cvae.infer_and_eval(train_batches, batch_size, sess)[-1]
+        generation_corpus = cvae.infer_and_eval(train_batches, sess)[-1]
         write_out(train_out_f, generation_corpus)
 
         # TEST
-        generation_corpus = cvae.infer_and_eval(test_batches, batch_size, sess)[-1]
+        generation_corpus = cvae.infer_and_eval(test_batches, sess)[-1]
         write_out(test_out_f, generation_corpus)

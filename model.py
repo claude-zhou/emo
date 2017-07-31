@@ -24,6 +24,7 @@ class CVAE(object):
                  num_gpu=2,
                  cell_type=tf.nn.rnn_cell.GRUCell):
         self.end_i = end_i
+        self.batch_size = batch_size
 
         self.num_layer = num_layer
         self.num_gpu = num_gpu
@@ -155,12 +156,17 @@ class CVAE(object):
                 all_words.remove(start_i)
                 self.all_emb = tf.nn.embedding_lookup(self.embedding, all_words)
 
+                stddev = 2 / np.sqrt(num_unit)
+                init = tf.truncated_normal((num_unit + latent_dim, 1), stddev=stddev)
+                W = tf.Variable(init, name="weights")
+                b = tf.Variable(tf.zeros(()), name="biases")
+
                 def handle_word_func(latent):
                     # loop over words
                     def handle_word(word):
                         x = tf.concat([word, latent], axis=0)
                         x = tf.expand_dims(x, 0)    # why this dimension works
-                        return tf.squeeze(tf.layers.dense(x, 1, activation=tf.nn.softmax))
+                        return tf.matmul(x, W) + b
                     return handle_word
 
                 # loop over tweets
@@ -173,10 +179,10 @@ class CVAE(object):
 
                     rep_mapped = tf.map_fn(func, sentence, swap_memory=True)
 
-                    return rep_mapped - tf.log(denominator), denominator
+                    return tf.log(denominator) - rep_mapped, 0
 
                 rep_t = tf.transpose(self.rep_output_emb, [1, 0, 2])
-                all_rep_mapped, _ = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
+                all_rep_mapped, p = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
                 numerators = tf.reduce_sum(all_rep_mapped * target_mask, 1)  # mask (not time-major)
 
                 self.bow_loss = tf.reduce_mean(numerators)
@@ -195,7 +201,7 @@ class CVAE(object):
             self.update_step = optimizer.apply_gradients(
                 zip(clipped_gradients, params))
 
-    def infer_and_eval(self, batches, batch_size, sess):
+    def infer_and_eval(self, batches, sess):
         sess = sess or sess.get_default_session()
 
         # inference
@@ -203,19 +209,21 @@ class CVAE(object):
         generation_corpus = []
 
         # ppl
-        loss_l = []
+        recon_loss_l = []
+        kl_loss_l = []
+        bow_loss_l =[]
         word_count = 0
-        total_recon_loss = 0
-        total_kl_loss = 0
 
         for batch in batches:
             feed_dict = dict(zip(self.placeholders, batch))
             feed_dict[self.kl_weight] = 1.
 
-            recon_loss, kl_loss = sess.run([self.recon_loss, self.kl_loss], feed_dict=feed_dict)
-            loss_l.append(recon_loss)
-            total_recon_loss += recon_loss * batch_size
-            total_kl_loss += kl_loss * batch_size
+            recon_loss, kl_loss, bow_loss = sess.run(
+                [self.recon_loss, self.kl_loss, self.bow_loss],
+                feed_dict=feed_dict)
+            recon_loss_l.append(recon_loss)
+            kl_loss_l.append(kl_loss)
+            bow_loss_l.append(bow_loss)
 
             # only emoji and original tweet needed. need to get rid of the magic number
             feed_dict = dict(zip(self.placeholders[0:3], batch[0:3]))
@@ -235,7 +243,9 @@ class CVAE(object):
                     out.append(digit)
                 generation_corpus.append(out)
 
-        total_recon_loss = np.mean(loss_l)
+        total_recon_loss = np.mean(recon_loss_l)
+        total_kl_loss = np.mean(kl_loss_l)
+        total_bow_loss_l = np.mean(bow_loss_l)
         perplexity = safe_exp(total_recon_loss / word_count)
 
         bleu_score, precisions, bp, ratio, translation_length, reference_length = compute_bleu(
@@ -243,16 +253,17 @@ class CVAE(object):
         for i in range(len(precisions)):
             precisions[i] *= 100
 
-        return total_recon_loss, total_kl_loss, perplexity, bleu_score * 100, precisions, generation_corpus
+        return (total_recon_loss, total_kl_loss, total_bow_loss_l,
+                perplexity, bleu_score * 100, precisions, generation_corpus)
 
     def train_update(self, batch, sess, weight):
         sess = sess or sess.get_default_session()
         feed_dict = dict(zip(self.placeholders, batch))
         feed_dict[self.kl_weight] = weight
 
-        _, recon_loss, kl_loss = sess.run(
-            [self.update_step, self.recon_loss, self.kl_loss], feed_dict=feed_dict)
-        return recon_loss, kl_loss
+        _, recon_loss, kl_loss, bow_loss = sess.run(
+            [self.update_step, self.recon_loss, self.kl_loss, self.bow_loss], feed_dict=feed_dict)
+        return recon_loss, kl_loss, bow_loss
 
     def flatten(self, ori_encoder_state):
 
