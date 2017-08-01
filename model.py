@@ -5,6 +5,7 @@ from helpers import safe_exp
 from bleu import compute_bleu
 from tensorflow.python.layers import core as layers_core
 
+from time import gmtime, strftime
 
 class CVAE(object):
     def __init__(self,
@@ -15,7 +16,7 @@ class CVAE(object):
                  batch_size,
                  start_i=1,
                  end_i=2,
-                 beam_width=5,
+                 beam_width=0,
                  maximum_iterations=50,
                  max_gradient_norm=5,
                  lr=1e-3,
@@ -31,6 +32,8 @@ class CVAE(object):
 
         self.num_unit = num_unit
         self.dropout = dropout
+
+        self.beam_width = beam_width
 
         self.emoji = tf.placeholder(tf.int32, shape=[batch_size], name="emoji")
         self.ori = tf.placeholder(tf.int32, shape=[None, batch_size], name="original_tweet")  # [len, batch_size]
@@ -103,24 +106,33 @@ class CVAE(object):
             self.logits = self.outputs.rnn_output
 
         with tf.variable_scope("decoder_infer") as decoder_scope:
-            # Replicate encoder infos beam_width times
             self.normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
             self.decoder_initial_state = tf.concat([self.normal_sample, self.condition], axis=1)
-            self.decoder_initial_state = tf.contrib.seq2seq.tile_batch(
-                self.decoder_initial_state, multiplier=beam_width)
-
             start_tokens = tf.fill([batch_size], start_i)
             end_token = end_i
-            # Define a beam-search decoder
-            decoder = tf.contrib.seq2seq.BeamSearchDecoder(
-                cell=self.decoder_cell,
-                embedding=self.embedding,
-                start_tokens=start_tokens,
-                end_token=end_token,
-                initial_state=self.decoder_initial_state,
-                beam_width=beam_width,
-                output_layer=self.projection_layer,
-                length_penalty_weight=0.0)
+
+            if beam_width > 0:
+                # Replicate encoder info beam_width times
+                self.decoder_initial_state = tf.contrib.seq2seq.tile_batch(
+                    self.decoder_initial_state, multiplier=beam_width)
+                decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+                    cell=self.decoder_cell,
+                    embedding=self.embedding,
+                    start_tokens=start_tokens,
+                    end_token=end_token,
+                    initial_state=self.decoder_initial_state,
+                    beam_width=beam_width,
+                    output_layer=self.projection_layer,
+                    length_penalty_weight=0.0)
+            else:
+                helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
+                    self.embedding, start_tokens, end_token)
+                decoder = tf.contrib.seq2seq.BasicDecoder(
+                    self.decoder_cell,
+                    helper,
+                    self.decoder_initial_state,
+                    output_layer=self.projection_layer  # applied per timestep
+                )
 
             # Dynamic decoding
             outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
@@ -130,8 +142,10 @@ class CVAE(object):
                 swap_memory=True,
                 scope=decoder_scope
             )
-            self.result = outputs.predicted_ids
-            # result = tf.transpose(result, [1, 2, 0])
+            if beam_width > 0:
+                self.result = outputs.predicted_ids
+            else:
+                self.result = outputs.sample_id
 
         with tf.variable_scope("loss"):
             with tf.variable_scope("reconstruction"):
@@ -152,40 +166,41 @@ class CVAE(object):
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
             with tf.variable_scope("bow"):
-                all_words = [i for i in range(vocab_size)]
-                all_words.remove(start_i)
-                self.all_emb = tf.nn.embedding_lookup(self.embedding, all_words)
-
-                stddev = 2 / np.sqrt(num_unit)
-                init = tf.truncated_normal((num_unit + latent_dim, 1), stddev=stddev)
-                W = tf.Variable(init, name="weights")
-                b = tf.Variable(tf.zeros(()), name="biases")
-
-                def handle_word_func(latent):
-                    # loop over words
-                    def handle_word(word):
-                        x = tf.concat([word, latent], axis=0)
-                        x = tf.expand_dims(x, 0)    # why this dimension works
-                        return tf.matmul(x, W) + b
-                    return handle_word
-
-                # loop over tweets
-                def handle_sentence(inp):
-                    sentence, latent = inp
-                    func = handle_word_func(latent)
-
-                    all_mapped = tf.map_fn(func, self.all_emb, swap_memory=True)
-                    denominator = tf.reduce_sum(tf.exp(all_mapped))
-
-                    rep_mapped = tf.map_fn(func, sentence, swap_memory=True)
-
-                    return tf.log(denominator) - rep_mapped, 0
-
-                rep_t = tf.transpose(self.rep_output_emb, [1, 0, 2])
-                all_rep_mapped, p = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
-                numerators = tf.reduce_sum(all_rep_mapped * target_mask, 1)  # mask (not time-major)
-
-                self.bow_loss = tf.reduce_mean(numerators)
+                self.bow_loss = self.kl_weight * 0
+                # all_words = [i for i in range(vocab_size)]
+                # all_words.remove(start_i)
+                # self.all_emb = tf.nn.embedding_lookup(self.embedding, all_words)
+                #
+                # stddev = 2 / np.sqrt(num_unit)
+                # init = tf.truncated_normal((num_unit + latent_dim, 1), stddev=stddev)
+                # W = tf.Variable(init, name="weights")
+                # b = tf.Variable(tf.zeros(()), name="biases")
+                #
+                # def handle_word_func(latent):
+                #     # loop over words
+                #     def handle_word(word):
+                #         x = tf.concat([word, latent], axis=0)
+                #         x = tf.expand_dims(x, 0)    # why this dimension works
+                #         return tf.matmul(x, W) + b
+                #     return handle_word
+                #
+                # # loop over tweets
+                # def handle_sentence(inp):
+                #     sentence, latent = inp
+                #     func = handle_word_func(latent)
+                #
+                #     all_mapped = tf.map_fn(func, self.all_emb, swap_memory=True)
+                #     denominator = tf.reduce_sum(tf.exp(all_mapped))
+                #
+                #     rep_mapped = tf.map_fn(func, sentence, swap_memory=True)
+                #
+                #     return tf.log(denominator) - rep_mapped, 0
+                #
+                # rep_t = tf.transpose(self.rep_output_emb, [1, 0, 2])
+                # all_rep_mapped, p = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
+                # numerators = tf.reduce_sum(all_rep_mapped * target_mask, 1)  # mask (not time-major)
+                #
+                # self.bow_loss = tf.reduce_mean(numerators)
 
             self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight + self.bow_loss)
 
@@ -211,23 +226,22 @@ class CVAE(object):
         # ppl
         recon_loss_l = []
         kl_loss_l = []
-        bow_loss_l =[]
+        bow_loss_l = []
         word_count = 0
 
         for batch in batches:
+            # time_now = strftime("%m-%d %H:%M:%S", gmtime())
+            # print(time_now)
+
             feed_dict = dict(zip(self.placeholders, batch))
             feed_dict[self.kl_weight] = 1.
 
-            recon_loss, kl_loss, bow_loss = sess.run(
-                [self.recon_loss, self.kl_loss, self.bow_loss],
+            gen_digits, recon_loss, kl_loss, bow_loss = sess.run(
+                [self.result, self.recon_loss, self.kl_loss, self.bow_loss],
                 feed_dict=feed_dict)
             recon_loss_l.append(recon_loss)
             kl_loss_l.append(kl_loss)
             bow_loss_l.append(bow_loss)
-
-            # only emoji and original tweet needed. need to get rid of the magic number
-            feed_dict = dict(zip(self.placeholders[0:3], batch[0:3]))
-            gen_digits = sess.run([self.result], feed_dict=feed_dict)[0]  # [time, batch_sz, beam_wd]
 
             rep_m = batch[3]
             rep_len = batch[4]
@@ -237,10 +251,16 @@ class CVAE(object):
                 reference_corpus.append([ref])
 
                 out = []
-                for digit in gen_digits[:, i, 0]:
-                    if digit == self.end_i:
-                        break
-                    out.append(digit)
+                if self.beam_width > 0:
+                    for digit in gen_digits[:, i, 0]:
+                        if digit == self.end_i:
+                            break
+                        out.append(digit)
+                else:
+                    for digit in gen_digits[:, i]:
+                        if digit == self.end_i:
+                            break
+                        out.append(digit)
                 generation_corpus.append(out)
 
         total_recon_loss = np.mean(recon_loss_l)
@@ -254,7 +274,8 @@ class CVAE(object):
             precisions[i] *= 100
 
         return (total_recon_loss, total_kl_loss, total_bow_loss_l,
-                perplexity, bleu_score * 100, precisions, generation_corpus)
+                perplexity, bleu_score * 100, precisions,
+                generation_corpus)
 
     def train_update(self, batch, sess, weight):
         sess = sess or sess.get_default_session()

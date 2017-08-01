@@ -10,6 +10,8 @@ from helpers import build_data, batch_generator
 from param_tiny import *
 import json
 
+from time import gmtime, strftime
+
 from os import makedirs
 from os.path import join, dirname, isfile
 
@@ -63,7 +65,7 @@ if __name__ == '__main__':
 
     saver = tf.train.Saver()
     with tf.Session() as sess:
-        total_step = (num_epoch * len(train_data) / batch_size)
+        total_step = (num_epoch * len(train_data[0]) / batch_size)
         if run_from_scratch or (not isfile(best_f)):
             global_step = best_step = 0
             start_epoch = best_epoch = 0
@@ -86,17 +88,19 @@ if __name__ == '__main__':
                 kl_weight = get_kl_weight(global_step, total_step, anneal_ratio)
                 recon_loss, kl_loss, bow_loss = cvae.train_update(batch, sess, kl_weight)
 
-                if global_step % test_step == 0:
-                    print('Epoch: %d Step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f' %
-                          (epoch, global_step, recon_loss, kl_loss, bow_loss))
+                if (global_step + 1) % test_step == 0:
+                    time_now = strftime("%m-%d %H:%M:%S", gmtime())
+                    print('epoch: %d step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
+                          (epoch, global_step, recon_loss, kl_loss, bow_loss, time_now))
 
+                if (global_step + 1) % (test_step * 10) == 0:
                     """ BATCH EVAL and INFER """
                     # TRAIN
-                    (train_recon_loss, train_kl_loss, train_bow_loss,
-                     perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
-                    put_eval(
-                        train_recon_loss, train_kl_loss, train_bow_loss,
-                        perplexity, train_bleu_score, precisions, "TRAIN")
+                    # (train_recon_loss, train_kl_loss, train_bow_loss,
+                    #  perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
+                    # put_eval(
+                    #     train_recon_loss, train_kl_loss, train_bow_loss,
+                    #     perplexity, train_bleu_score, precisions, "TRAIN")
 
                     # TEST
                     (test_recon_loss, test_kl_loss, test_bow_loss,
@@ -106,11 +110,10 @@ if __name__ == '__main__':
                         perplexity, test_bleu_score, precisions, "TEST")
 
                     # get down best
-                    # if test_bleu_score >= best_bleu:
-                    #     best_bleu = test_bleu_score
-                    if train_bleu_score >= best_bleu:  # TODO: train or test?
-                        best_bleu = train_bleu_score
-
+                    if test_bleu_score >= best_bleu and kl_weight == 1.:
+                        best_bleu = test_bleu_score
+                    # if train_bleu_score >= best_bleu:  # TODO: train or test?
+                    #     best_bleu = train_bleu_score
                         best_epoch = epoch
                         best_step = global_step
 
