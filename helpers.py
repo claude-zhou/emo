@@ -2,6 +2,7 @@ import numpy as np
 import random
 import tensorflow as tf
 import math
+import sys
 
 """build data"""
 def build_vocab(vocab_path):
@@ -128,3 +129,17 @@ def generate_graph():
     with open('miscellanies/graphpb.txt', 'w') as f:
         f.write(graphpb_txt)
     exit(0)
+
+def print_out(s, f=None, new_line=True):
+  """Similar to print but with support to flush and output to a file."""
+  if f:
+    f.write(s.encode("utf-8"))
+    if new_line:
+      f.write(b"\n")
+
+  # stdout
+  print(s, end="", file=sys.stdout)
+  if new_line:
+    sys.stdout.write("\n")
+  sys.stdout.flush()
+

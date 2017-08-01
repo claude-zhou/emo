@@ -6,8 +6,8 @@
 import tensorflow as tf
 tf.logging.set_verbosity(tf.logging.DEBUG)
 
-from helpers import build_data, batch_generator
-from param_tiny import *
+from helpers import build_data, batch_generator, print_out
+from param_full import *
 import json
 
 from time import gmtime, strftime
@@ -18,10 +18,10 @@ from os.path import join, dirname, isfile
 from math import tanh
 
 def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name):
-    print("%s: " % name, end="")
+    print_out("%s: " % name, new_line=False)
     format_string = '\trecon/kl/bow-loss/ppl:\t%.3f\t%.3f\t%.3f\t%.3f\tBLEU:' + '\t%.1f' * 5
     format_tuple = (recon_loss, kl_loss, bow_loss, ppl, bleu_score) + tuple(precisions_list)
-    print(format_string % format_tuple)
+    print_out(format_string % format_tuple)
 
 def write_out(file, corpus):
     with open(file, 'w', encoding="utf-8") as f:
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     test_batches = batch_generator(
         test_data, start_i, end_i, batch_size, permutate=False)
 
-    print("*** DATA READY ***")
+    print_out("*** DATA READY ***")
     makedirs(dirname(join(output_dir, "breakpoints/")), exist_ok=True)
     best_f = join(output_dir, "best_bleu.txt")
 
@@ -90,8 +90,8 @@ if __name__ == '__main__':
 
                 if (global_step + 1) % test_step == 0:
                     time_now = strftime("%m-%d %H:%M:%S", gmtime())
-                    print('epoch: %d step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
-                          (epoch, global_step, recon_loss, kl_loss, bow_loss, time_now))
+                    print_out('epoch: %d step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
+                              (epoch, global_step, recon_loss, kl_loss, bow_loss, time_now))
 
                 if (global_step + 1) % (test_step * 10) == 0:
                     """ BATCH EVAL and INFER """
@@ -131,8 +131,10 @@ if __name__ == '__main__':
         # TRAIN
         train_batches = batch_generator(
             train_data, start_i, end_i, batch_size, permutate=False)
-        generation_corpus = cvae.infer_and_eval(train_batches, sess)[-1]
+        (train_recon_loss, train_kl_loss, train_bow_loss,
+         perplexity, train_bleu_score, precisions, generation_corpus) = cvae.infer_and_eval(train_batches, sess)
         write_out(train_out_f, generation_corpus)
+        print_out("BEST TRAIN BLEU: %.1f" % train_bleu_score)
 
         # TEST
         generation_corpus = cvae.infer_and_eval(test_batches, sess)[-1]
