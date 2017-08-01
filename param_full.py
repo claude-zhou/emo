@@ -28,7 +28,7 @@ vocab_size = len(word2index)
 batch_size = 128   #
 num_unit = 128      # num_unit should be equal to embed_size
 embed_size = 128    #
-latent_dim = 128    #
+latent_dim = 256    #
 num_gpu = 2
 
 # default
@@ -45,6 +45,6 @@ cell_type = tf.nn.rnn_cell.GRUCell
 """hyper params for running the graph"""
 num_epoch = 12      #
 test_step = 100      #
-anneal_ratio = 0.1  #
+anneal_ratio = 0.2  #
 
 cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, batch_size, start_i, end_i, num_gpu=num_gpu)

@@ -142,4 +142,3 @@ def print_out(s, f=None, new_line=True):
   if new_line:
     sys.stdout.write("\n")
   sys.stdout.flush()
-

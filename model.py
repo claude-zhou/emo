@@ -148,8 +148,8 @@ class CVAE(object):
                 self.result = outputs.sample_id
 
         with tf.variable_scope("loss"):
+            max_time = tf.shape(self.rep_output)[0]
             with tf.variable_scope("reconstruction"):
-                max_time = tf.shape(self.rep_output)[0]
                 # TODO: check if loss calculation correct! need SCRUTINY into its shape
                 cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
                     labels=self.rep_output, logits=self.logits)
@@ -166,41 +166,15 @@ class CVAE(object):
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
             with tf.variable_scope("bow"):
-                self.bow_loss = self.kl_weight * 0
-                # all_words = [i for i in range(vocab_size)]
-                # all_words.remove(start_i)
-                # self.all_emb = tf.nn.embedding_lookup(self.embedding, all_words)
-                #
-                # stddev = 2 / np.sqrt(num_unit)
-                # init = tf.truncated_normal((num_unit + latent_dim, 1), stddev=stddev)
-                # W = tf.Variable(init, name="weights")
-                # b = tf.Variable(tf.zeros(()), name="biases")
-                #
-                # def handle_word_func(latent):
-                #     # loop over words
-                #     def handle_word(word):
-                #         x = tf.concat([word, latent], axis=0)
-                #         x = tf.expand_dims(x, 0)    # why this dimension works
-                #         return tf.matmul(x, W) + b
-                #     return handle_word
-                #
-                # # loop over tweets
-                # def handle_sentence(inp):
-                #     sentence, latent = inp
-                #     func = handle_word_func(latent)
-                #
-                #     all_mapped = tf.map_fn(func, self.all_emb, swap_memory=True)
-                #     denominator = tf.reduce_sum(tf.exp(all_mapped))
-                #
-                #     rep_mapped = tf.map_fn(func, sentence, swap_memory=True)
-                #
-                #     return tf.log(denominator) - rep_mapped, 0
-                #
-                # rep_t = tf.transpose(self.rep_output_emb, [1, 0, 2])
-                # all_rep_mapped, p = tf.map_fn(handle_sentence, (rep_t, self.z_sample), swap_memory=True)
-                # numerators = tf.reduce_sum(all_rep_mapped * target_mask, 1)  # mask (not time-major)
-                #
-                # self.bow_loss = tf.reduce_mean(numerators)
+                mlp_b = layers_core.Dense(
+                    vocab_size, use_bias=False, name="MLP_b")
+                self.latent_logits = mlp_b(self.z_sample)                           # [batch_size, vocab_size]
+                self.latent_logits = tf.expand_dims(self.latent_logits, 0)          # [1, batch_size, vocab_size]
+                self.latent_logits = tf.tile(self.latent_logits, [max_time, 1, 1])  # [max_time, batch_size, vocab_size]
+
+                cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
+                    labels=self.rep_output, logits=self.latent_logits)
+                self.bow_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
             self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight + self.bow_loss)
 
