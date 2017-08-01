@@ -223,7 +223,6 @@ class CVAE(object):
         reference_corpus = []
         generation_corpus = []
 
-        # ppl
         recon_loss_l = []
         kl_loss_l = []
         bow_loss_l = []
@@ -266,7 +265,7 @@ class CVAE(object):
         total_recon_loss = np.mean(recon_loss_l)
         total_kl_loss = np.mean(kl_loss_l)
         total_bow_loss_l = np.mean(bow_loss_l)
-        perplexity = safe_exp(total_recon_loss / word_count)
+        perplexity = safe_exp(total_recon_loss * self.batch_size * len(recon_loss_l) / word_count)
 
         bleu_score, precisions, bp, ratio, translation_length, reference_length = compute_bleu(
             reference_corpus, generation_corpus)
