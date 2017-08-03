@@ -14,6 +14,8 @@ class CVAE(object):
                  num_unit,
                  latent_dim,
                  batch_size,
+                 kl_ceiling,
+                 bow_ceiling,
                  start_i=1,
                  end_i=2,
                  beam_width=0,
@@ -166,6 +168,7 @@ class CVAE(object):
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
             with tf.variable_scope("bow"):
+                # self.bow_loss = self.kl_weight * 0
                 mlp_b = layers_core.Dense(
                     vocab_size, use_bias=False, name="MLP_b")
                 self.latent_logits = mlp_b(self.z_sample)                           # [batch_size, vocab_size]
@@ -176,7 +179,8 @@ class CVAE(object):
                     labels=self.rep_output, logits=self.latent_logits)
                 self.bow_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
-            self.loss = tf.reduce_mean(self.recon_loss + self.kl_loss * self.kl_weight + self.bow_loss)
+            self.loss = tf.reduce_mean(
+                self.recon_loss + self.kl_loss * self.kl_weight * kl_ceiling + self.bow_loss * bow_ceiling)
 
         # Calculate and clip gradients
         with tf.variable_scope("optimization"):
@@ -292,6 +296,7 @@ class CVAE(object):
         for i in range(self.num_layer):
             # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
             device_str = "/gpu:%d" % (i + base_gpu % self.num_gpu)
+            print(device_str)
             single_cell = tf.contrib.rnn.GRUCell(self.num_unit)
             single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
             single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
