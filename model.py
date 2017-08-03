@@ -13,6 +13,7 @@ class CVAE(object):
                  embed_size,
                  num_unit,
                  latent_dim,
+                 emoji_dim,
                  batch_size,
                  kl_ceiling,
                  bow_ceiling,
@@ -77,7 +78,8 @@ class CVAE(object):
                 self.rep_emb, self.rep_len, dtype=tf.float32)
             self.rep_encoder_state = self.flatten(rep_encoder_state)
 
-        self.condition = tf.concat([self.ori_encoder_state, self.emoji_emb], axis=1, name="condition")
+        emoji_vec = tf.layers.dense(self.emoji_emb, emoji_dim, activation=tf.nn.tanh)
+        self.condition = tf.concat([self.ori_encoder_state, emoji_vec], axis=1, name="condition")
 
         with tf.variable_scope("param_Gaussian"):
             dense_input = tf.concat([self.rep_encoder_state, self.condition], axis=1)
@@ -91,7 +93,7 @@ class CVAE(object):
 
         with tf.variable_scope("decoder_train") as decoder_scope:
             self.decoder_initial_state = tf.concat([self.z_sample, self.condition], axis=1)
-            self.decoder_cell = cell_type(latent_dim + 2 * num_layer * num_unit + embed_size)
+            self.decoder_cell = cell_type(latent_dim + 2 * num_layer * num_unit + emoji_dim)
             helper = tf.contrib.seq2seq.TrainingHelper(
                 self.rep_input_emb, self.rep_len + 1, time_major=True)
             self.projection_layer = layers_core.Dense(

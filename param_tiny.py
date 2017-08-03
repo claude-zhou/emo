@@ -6,6 +6,7 @@ num_unit = 32       # num_unit should be equal to embed_size
 embed_size = 32     #
 latent_dim = 64     #
 num_gpu = 2
+emoji_dim = 2
 
 # default
 lr = 1e-3

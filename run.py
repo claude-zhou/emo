@@ -106,7 +106,8 @@ if __name__ == '__main__':
     vocab_size = len(word2index)
 
     # building graph
-    cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, batch_size, FLAGS.kl_ceiling, FLAGS.bow_ceiling,
+    cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, emoji_dim, batch_size,
+                FLAGS.kl_ceiling, FLAGS.bow_ceiling,
                 start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout,
                 num_layer, num_gpu, cell_type)
 
@@ -146,7 +147,7 @@ if __name__ == '__main__':
 
                 if global_step % FLAGS.test_step == 0:
                     time_now = strftime("%m-%d %H:%M:%S", gmtime())
-                    print_out('epoch: %d step: %d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
+                    print_out('epoch:\t%d\tstep:\t%d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
                               (epoch, global_step, recon_loss, kl_loss, bow_loss, time_now))
 
                 if global_step % (FLAGS.test_step * 10) == 0:
@@ -155,7 +156,7 @@ if __name__ == '__main__':
                     # TEST
                     (test_recon_loss, test_kl_loss, test_bow_loss,
                      perplexity, test_bleu_score, precisions, _) = cvae.infer_and_eval(test_batches, sess)
-                    print_out("EPOCH: %d STEP: %d\t" % (epoch, global_step), new_line=False)
+                    print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False)
                     put_eval(
                         test_recon_loss, test_kl_loss, test_bow_loss,
                         perplexity, test_bleu_score, precisions, "TEST")
@@ -177,7 +178,7 @@ if __name__ == '__main__':
             # TRAIN
             (train_recon_loss, train_kl_loss, train_bow_loss,
              perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
-            print_out("EPOCH: %d STEP: %d\t" % (epoch, global_step), new_line=False)
+            print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False)
             put_eval(
                 train_recon_loss, train_kl_loss, train_bow_loss,
                 perplexity, train_bleu_score, precisions, "TRAIN")
