@@ -13,7 +13,6 @@ lr = 1e-3
 max_gradient_norm = 5
 maximum_iterations = 50
 beam_width = 0
-num_layer = 1
 dropout = 0.2
 
 # GRUCell won't have multiple kinds of state. Wouldn't have to flatten its state before concatenation

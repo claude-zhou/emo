@@ -4,7 +4,7 @@ import tensorflow as tf
 batch_size = 2      #
 num_unit = 32       # num_unit should be equal to embed_size
 embed_size = 32     #
-latent_dim = 64     #
+latent_dim = 65     #
 num_gpu = 2
 emoji_dim = 2
 
@@ -13,7 +13,6 @@ lr = 1e-3
 max_gradient_norm = 5
 maximum_iterations = 50
 beam_width = 5
-num_layer = 1
 dropout = 0.2
 
 # GRUCell won't have multiple kinds of state. Wouldn't have to flatten its state before concatenation

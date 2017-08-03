@@ -24,13 +24,11 @@ class CVAE(object):
                  max_gradient_norm=5,
                  lr=1e-3,
                  dropout=0.2,
-                 num_layer=1,
                  num_gpu=2,
                  cell_type=tf.nn.rnn_cell.GRUCell):
         self.end_i = end_i
         self.batch_size = batch_size
 
-        self.num_layer = num_layer
         self.num_gpu = num_gpu
 
         self.num_unit = num_unit
@@ -71,7 +69,7 @@ class CVAE(object):
         with tf.variable_scope("original_tweet_encoder"):
             ori_encoder_state = self.build_bidirectional_rnn(
                 self.ori_emb, self.ori_len, dtype=tf.float32)
-            self.ori_encoder_state = self.flatten(ori_encoder_state)
+            ori_encoder_state_flat = self.flatten(ori_encoder_state)
 
         with tf.variable_scope("response_tweet_encoder"):
             rep_encoder_state = self.build_bidirectional_rnn(
@@ -79,27 +77,33 @@ class CVAE(object):
             self.rep_encoder_state = self.flatten(rep_encoder_state)
 
         emoji_vec = tf.layers.dense(self.emoji_emb, emoji_dim, activation=tf.nn.tanh)
-        self.condition = tf.concat([self.ori_encoder_state, emoji_vec], axis=1, name="condition")
+        self.condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("param_Gaussian"):
-            dense_input = tf.concat([self.rep_encoder_state, self.condition], axis=1)
+            dense_input = tf.concat([self.rep_encoder_state, self.condition_flat], axis=1)
             self.mu = tf.layers.dense(
-                dense_input, latent_dim, name="mean")
+                dense_input, latent_dim, activation=tf.nn.tanh, name="mean")
             self.log_var = tf.layers.dense(
-                dense_input, latent_dim, name="log_variance")
+                dense_input, latent_dim, activation=tf.nn.tanh, name="log_variance")
 
         with tf.variable_scope("reparameterization"):
             self.z_sample = self.mu + tf.exp(self.log_var / 2.) * tf.random_normal(shape=tf.shape(self.mu))
 
         with tf.variable_scope("decoder_train") as decoder_scope:
-            self.decoder_initial_state = tf.concat([self.z_sample, self.condition], axis=1)
-            self.decoder_cell = cell_type(latent_dim + 2 * num_layer * num_unit + emoji_dim)
+            decoder_initial_state = (
+                tf.concat([self.z_sample, ori_encoder_state[0], emoji_vec], axis=1),
+                tf.concat([self.z_sample, ori_encoder_state[1], emoji_vec], axis=1)
+            )
+
+            self.decoder_cell = tf.nn.rnn_cell.MultiRNNCell(
+                [cell_type(latent_dim + num_unit + emoji_dim) for i in range(2)])
+
             helper = tf.contrib.seq2seq.TrainingHelper(
                 self.rep_input_emb, self.rep_len + 1, time_major=True)
             self.projection_layer = layers_core.Dense(
                 vocab_size, use_bias=False, name="output_projection")
             decoder = tf.contrib.seq2seq.BasicDecoder(
-                self.decoder_cell, helper, self.decoder_initial_state,
+                self.decoder_cell, helper, decoder_initial_state,
                 output_layer=self.projection_layer)
             self.outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
                 decoder,
@@ -110,8 +114,11 @@ class CVAE(object):
             self.logits = self.outputs.rnn_output
 
         with tf.variable_scope("decoder_infer") as decoder_scope:
-            self.normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
-            self.decoder_initial_state = tf.concat([self.normal_sample, self.condition], axis=1)
+            normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
+            self.decoder_initial_state = (
+                tf.concat([normal_sample, ori_encoder_state[0], emoji_vec], axis=1),
+                tf.concat([normal_sample, ori_encoder_state[1], emoji_vec], axis=1)
+            )
             start_tokens = tf.fill([batch_size], start_i)
             end_token = end_i
 
@@ -266,21 +273,13 @@ class CVAE(object):
         return recon_loss, kl_loss, bow_loss
 
     def flatten(self, ori_encoder_state):
-
-        if self.num_layer == 1:
-            rtn = tf.concat(
+        return tf.concat(
                 [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
-        else:  # TODO: all the layers needed?
-            rtn = tf.concat([ori_encoder_state[0][0], ori_encoder_state[1][0]], axis=1)
-            for i in range(1, self.num_layer):
-                rtn = tf.concat([rtn, ori_encoder_state[0][i]], axis=1)
-                rtn = tf.concat([rtn, ori_encoder_state[1][i]], axis=1)
-        return rtn
 
     def build_bidirectional_rnn(self, inputs, sequence_length, dtype, base_gpu=0):
         # Construct forward and backward cells
         fw_cell = self.create_rnn_cell(base_gpu)
-        bw_cell = self.create_rnn_cell((base_gpu + self.num_layer))
+        bw_cell = self.create_rnn_cell((base_gpu + 1))
 
         _, bi_state = tf.nn.bidirectional_dynamic_rnn(
             fw_cell,
@@ -293,18 +292,10 @@ class CVAE(object):
         return bi_state
 
     def create_rnn_cell(self, base_gpu):
-        # Multi-GPU
-        cell_list = []
-        for i in range(self.num_layer):
-            # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
-            device_str = "/gpu:%d" % (i + base_gpu % self.num_gpu)
-            print(device_str)
-            single_cell = tf.contrib.rnn.GRUCell(self.num_unit)
-            single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
-            single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
-            cell_list.append(single_cell)
-
-        if len(cell_list) == 1:  # Single layer.
-            return cell_list[0]
-        else:  # Multi layers
-            return tf.contrib.rnn.MultiRNNCell(cell_list)
+        # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
+        device_str = "/gpu:%d" % (base_gpu % self.num_gpu)
+        print(device_str)
+        single_cell = tf.contrib.rnn.GRUCell(self.num_unit)
+        single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
+        single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
+        return single_cell

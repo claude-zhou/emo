@@ -109,7 +109,7 @@ if __name__ == '__main__':
     cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, emoji_dim, batch_size,
                 FLAGS.kl_ceiling, FLAGS.bow_ceiling,
                 start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout,
-                num_layer, num_gpu, cell_type)
+                num_gpu, cell_type)
 
     # building data
     train_data = build_data(train_ori_f, train_rep_f, word2index)
