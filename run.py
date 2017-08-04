@@ -73,8 +73,6 @@ if __name__ == '__main__':
 
     # dirs
     nmt_parser.add_argument("--input_dir", type=str, required=True,)
-    nmt_parser.add_argument("--output_dir_name", type=str, required=True, help="""\
-        create output dir inside input_dir if not exist""")
 
     nmt_parser.add_argument("--param_set", type=str, required=True, help="""\
             tiny/medium/full""")
@@ -86,9 +84,11 @@ if __name__ == '__main__':
     elif FLAGS.param_set == "full":
         from param_full import *
 
+    output_dir_name = strftime("%m-%d_%H-%M-%S", gmtime())
+
     """directories"""
     input_dir = FLAGS.input_dir
-    output_dir = join(input_dir, FLAGS.output_dir_name)
+    output_dir = join(input_dir, output_dir_name)
     train_out_f = join(output_dir, "train.out")
     test_out_f = join(output_dir, "test.out")
     vocab_f = "vocab.ori"
@@ -98,6 +98,14 @@ if __name__ == '__main__':
     test_rep_f = join(input_dir, "test.rep")
 
     makedirs(dirname(join(output_dir, "breakpoints/")), exist_ok=True)
+    with open(join(output_dir, "hparams.txt"), "w") as f:
+        with open("param_%s.py" % FLAGS.param_set) as ff:
+            content = ff.read()
+        f.write(content + "\n")
+        for key, var in vars(FLAGS).items():
+            s = str(key) + " = " + str(var) + "\n"
+            f.write(s)
+
     best_f = join(output_dir, "best_bleu.txt")
 
     # build vocab
@@ -107,9 +115,8 @@ if __name__ == '__main__':
 
     # building graph
     cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, emoji_dim, batch_size,
-                FLAGS.kl_ceiling, FLAGS.bow_ceiling,
-                start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout,
-                num_gpu, cell_type)
+                FLAGS.kl_ceiling, FLAGS.bow_ceiling, decoder_layer,
+                start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout, num_gpu, cell_type)
 
     # building data
     train_data = build_data(train_ori_f, train_rep_f, word2index)

@@ -14,6 +14,7 @@ max_gradient_norm = 5
 maximum_iterations = 50
 beam_width = 0
 dropout = 0.2
+decoder_layer = 1
 
 # GRUCell won't have multiple kinds of state. Wouldn't have to flatten its state before concatenation
 cell_type = tf.nn.rnn_cell.GRUCell
