@@ -142,7 +142,7 @@ if __name__ == '__main__':
             best_bleu, best_epoch, best_step = restore_best(best_f)
             global_step = best_step
             start_epoch = best_epoch
-            path = join(output_dir, "breakpoints/epoch_%d_step_%d.ckpt" % (best_epoch, best_step))
+            path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
             saver.restore(sess, path)
 
         # generate_graph()
@@ -187,7 +187,7 @@ if __name__ == '__main__':
                         best_epoch = epoch
                         best_step = global_step
 
-                        path = join(output_dir, "breakpoints/epoch_%d_step_%d.ckpt" % (epoch, global_step))
+                        path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
                         save_path = saver.save(sess, path)
                         # save best epoch/step
                         save_best(best_f, best_bleu, best_epoch, best_step)
@@ -202,7 +202,7 @@ if __name__ == '__main__':
                 perplexity, train_bleu_score, precisions, "TRAIN")
 
         """RESTORE BEST MODEL"""
-        path = join(output_dir, "breakpoints/epoch_%d_step_%d.ckpt" % (best_epoch, best_step))
+        path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
         saver.restore(sess, path)
 
         """GENERATE"""
