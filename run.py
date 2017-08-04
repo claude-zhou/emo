@@ -3,6 +3,7 @@
 # TODO-3: add tricks proposed by Google MT
 
 import tensorflow as tf
+import numpy as np
 tf.logging.set_verbosity(tf.logging.DEBUG)
 
 from helpers import build_data, batch_generator, print_out, build_vocab
@@ -83,6 +84,8 @@ if __name__ == '__main__':
         from param_tiny import *
     elif FLAGS.param_set == "full":
         from param_full import *
+    elif FLAGS.param_set == "medium":
+        from param_medium import *
 
     output_dir_name = strftime("%m-%d_%H-%M-%S", gmtime())
 
@@ -147,16 +150,24 @@ if __name__ == '__main__':
             train_batches = batch_generator(
                 train_data, start_i, end_i, batch_size)
 
+            recon_l = []
+            kl_l = []
+            bow_l = []
             for batch in train_batches:
                 """ TRAIN """
                 kl_weight = get_kl_weight(global_step, total_step, FLAGS.anneal_ratio)
                 recon_loss, kl_loss, bow_loss = cvae.train_update(batch, sess, kl_weight)
+                recon_l.append(recon_loss)
+                kl_l.append(kl_loss)
+                bow_l.append(bow_loss)
 
                 if global_step % FLAGS.test_step == 0:
                     time_now = strftime("%m-%d %H:%M:%S", gmtime())
                     print_out('epoch:\t%d\tstep:\t%d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
-                              (epoch, global_step, recon_loss, kl_loss, bow_loss, time_now))
-
+                              (epoch, global_step, np.mean(recon_l), np.mean(kl_l), np.mean(bow_l), time_now))
+                    recon_l = []
+                    kl_l = []
+                    bow_l = []
                 if global_step % (FLAGS.test_step * 10) == 0:
                     """ EVAL and INFER """
 
