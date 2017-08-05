@@ -62,7 +62,7 @@ if __name__ == '__main__':
         param that limit kl_loss proportion in the total loss""")
     nmt_parser.add_argument("--bow_ceiling", type=float, default=1., help="""\
         param that limit bow_loss proportion in the total loss""")
-    nmt_parser.add_argument("--run_from_scratch", type=bool, default=True, help="""\
+    nmt_parser.add_argument("--recover_from_dir", type=str, default="", help="""\
         run from scratch or from previous breakpoint of best bleu score""")
 
     # hyper params for running the graph
@@ -109,8 +109,6 @@ if __name__ == '__main__':
             s = str(key) + " = " + str(var) + "\n"
             f.write(s)
 
-    best_f = join(output_dir, "best_bleu.txt")
-
     # build vocab
     word2index, index2word = build_vocab(join(input_dir, vocab_f))
     start_i, end_i = word2index['<s>'], word2index['</s>']
@@ -133,17 +131,20 @@ if __name__ == '__main__':
     saver = tf.train.Saver()
     with tf.Session() as sess:
         total_step = (FLAGS.num_epoch * len(train_data[0]) / batch_size)
-        if FLAGS.run_from_scratch or (not isfile(best_f)):
+        if FLAGS.recover_from_dir == "":
+            best_f = join(output_dir, "best_bleu.txt")
             global_step = best_step = 1
             start_epoch = best_epoch = 1
             best_bleu = 0.
             sess.run(tf.global_variables_initializer())
         else:
+            best_f = join(FLAGS.recover_from_dir, "best_bleu.txt")
             best_bleu, best_epoch, best_step = restore_best(best_f)
             global_step = best_step
             start_epoch = best_epoch
-            path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
-            saver.restore(sess, path)
+
+            best_dir = join(FLAGS.recover_from_dir, "breakpoints/best_test_bleu.ckpt")
+            saver.restore(sess, best_dir)
 
         # generate_graph()
         for epoch in range(start_epoch, FLAGS.num_epoch + 1):
