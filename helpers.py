@@ -133,9 +133,10 @@ def generate_graph():
 def print_out(s, f=None, new_line=True):
   """Similar to print but with support to flush and output to a file."""
   if f:
-    f.write(s.encode("utf-8"))
+    f.write(s)
     if new_line:
-      f.write(b"\n")
+      f.write("\n")
+    f.flush()
 
   # stdout
   print(s, end="", file=sys.stdout)

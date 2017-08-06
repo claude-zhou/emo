@@ -19,11 +19,11 @@ from math import tanh
 import argparse
 from model import CVAE
 
-def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name):
-    print_out("%s: " % name, new_line=False)
+def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name, f):
+    print_out("%s: " % name, new_line=False, f=f)
     format_string = '\trecon/kl/bow-loss/ppl:\t%.3f\t%.3f\t%.3f\t%.3f\tBLEU:' + '\t%.1f' * 5
     format_tuple = (recon_loss, kl_loss, bow_loss, ppl, bleu_score) + tuple(precisions_list)
-    print_out(format_string % format_tuple)
+    print_out(format_string % format_tuple, f=f)
 
 def write_out(file, corpus):
     with open(file, 'w', encoding="utf-8") as f:
@@ -109,6 +109,8 @@ if __name__ == '__main__':
             s = str(key) + " = " + str(var) + "\n"
             f.write(s)
 
+    log_f = open(join(output_dir, "log.txt"), "w")
+
     # build vocab
     word2index, index2word = build_vocab(join(input_dir, vocab_f))
     start_i, end_i = word2index['<s>'], word2index['</s>']
@@ -165,7 +167,7 @@ if __name__ == '__main__':
                 if global_step % FLAGS.test_step == 0:
                     time_now = strftime("%m-%d %H:%M:%S", gmtime())
                     print_out('epoch:\t%d\tstep:\t%d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
-                              (epoch, global_step, np.mean(recon_l), np.mean(kl_l), np.mean(bow_l), time_now))
+                              (epoch, global_step, np.mean(recon_l), np.mean(kl_l), np.mean(bow_l), time_now), f=log_f)
                     recon_l = []
                     kl_l = []
                     bow_l = []
@@ -175,10 +177,10 @@ if __name__ == '__main__':
                     # TEST
                     (test_recon_loss, test_kl_loss, test_bow_loss,
                      perplexity, test_bleu_score, precisions, _) = cvae.infer_and_eval(test_batches, sess)
-                    print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False)
+                    print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False, f=log_f)
                     put_eval(
                         test_recon_loss, test_kl_loss, test_bow_loss,
-                        perplexity, test_bleu_score, precisions, "TEST")
+                        perplexity, test_bleu_score, precisions, "TEST", log_f)
 
                     # get down best
                     if test_bleu_score >= best_bleu and kl_weight == 1.:
@@ -197,10 +199,10 @@ if __name__ == '__main__':
             # TRAIN
             (train_recon_loss, train_kl_loss, train_bow_loss,
              perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
-            print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False)
+            print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False, f=log_f)
             put_eval(
                 train_recon_loss, train_kl_loss, train_bow_loss,
-                perplexity, train_bleu_score, precisions, "TRAIN")
+                perplexity, train_bleu_score, precisions, "TRAIN", log_f)
 
         """RESTORE BEST MODEL"""
         path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
@@ -213,8 +215,10 @@ if __name__ == '__main__':
         (train_recon_loss, train_kl_loss, train_bow_loss,
          perplexity, train_bleu_score, precisions, generation_corpus) = cvae.infer_and_eval(train_batches, sess)
         write_out(train_out_f, generation_corpus)
-        print_out("BEST TRAIN BLEU: %.1f" % train_bleu_score)
+        print_out("BEST TRAIN BLEU: %.1f" % train_bleu_score, f=log_f)
 
         # TEST
         generation_corpus = cvae.infer_and_eval(test_batches, sess)[-1]
         write_out(test_out_f, generation_corpus)
+
+    log_f.close()

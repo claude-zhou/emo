@@ -81,16 +81,20 @@ class CVAE(object):
 
         with tf.variable_scope("representation_network"):
             rn_input = tf.concat([rep_encoder_state_flat, condition_flat], axis=1)
+            r_hidden = tf.layers.dense(
+                rn_input, int(1.5 * latent_dim), activation=tf.nn.relu, name="r_net_hidden")
             self.mu = tf.layers.dense(
-                rn_input, latent_dim, activation=tf.nn.tanh, name="q_mean")
+                r_hidden, latent_dim, activation=tf.nn.tanh, name="q_mean")
             self.log_var = tf.layers.dense(
-                rn_input, latent_dim, activation=tf.nn.tanh, name="q_log_var")
+                r_hidden, latent_dim, activation=tf.nn.tanh, name="q_log_var")
 
         with tf.variable_scope("prior_network"):
+            p_hidden = tf.layers.dense(
+                condition_flat, latent_dim, activation=tf.nn.relu, name="r_net_hidden")
             self.p_mu = tf.layers.dense(
-                condition_flat, latent_dim, activation=tf.nn.tanh, name="p_mean")
+                p_hidden, latent_dim, activation=tf.nn.tanh, name="p_mean")
             self.p_log_var = tf.layers.dense(
-                condition_flat, latent_dim, activation=tf.nn.tanh, name="p_log_var")
+                p_hidden, latent_dim, activation=tf.nn.tanh, name="p_log_var")
 
         with tf.variable_scope("reparameterization"):
             self.z_sample = self.mu + tf.exp(self.log_var / 2.) * tf.random_normal(shape=tf.shape(self.mu))
