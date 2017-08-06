@@ -48,12 +48,12 @@ class CVAE(object):
         self.rep_output = tf.placeholder(tf.int32, shape=[None, batch_size], name="response_end_tag")
 
         self.kl_weight = tf.placeholder(tf.float32, shape=(), name="kl_weight")
+        # self.inferring = tf.placeholder_with_default(False, shape=(), name='inferring')
 
         self.placeholders = [
             self.emoji,
             self.ori, self.ori_len,
-            self.rep, self.rep_len, self.rep_input, self.rep_output,
-            self.kl_weight
+            self.rep, self.rep_len, self.rep_input, self.rep_output
         ]
 
         with tf.variable_scope("embeddings"):
@@ -77,20 +77,27 @@ class CVAE(object):
         with tf.variable_scope("response_tweet_encoder"):
             rep_encoder_state = self.build_bidirectional_rnn(
                 num_unit, self.rep_emb, self.rep_len, dtype=tf.float32)
-            self.rep_encoder_state = self.flatten(rep_encoder_state)
+            rep_encoder_state_flat = self.flatten(rep_encoder_state)
 
         emoji_vec = tf.layers.dense(self.emoji_emb, emoji_dim, activation=tf.nn.tanh)
-        self.condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
+        condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
-        with tf.variable_scope("param_Gaussian"):
-            dense_input = tf.concat([self.rep_encoder_state, self.condition_flat], axis=1)
+        with tf.variable_scope("representation_network"):
+            rn_input = tf.concat([rep_encoder_state_flat, condition_flat], axis=1)
             self.mu = tf.layers.dense(
-                dense_input, latent_dim, activation=tf.nn.tanh, name="mean")
+                rn_input, latent_dim, activation=tf.nn.tanh, name="q_mean")
             self.log_var = tf.layers.dense(
-                dense_input, latent_dim, activation=tf.nn.tanh, name="log_variance")
+                rn_input, latent_dim, activation=tf.nn.tanh, name="q_log_var")
+
+        with tf.variable_scope("prior_network"):
+            self.p_mu = tf.layers.dense(
+                condition_flat, latent_dim, activation=tf.nn.tanh, name="p_mean")
+            self.p_log_var = tf.layers.dense(
+                condition_flat, latent_dim, activation=tf.nn.tanh, name="p_log_var")
 
         with tf.variable_scope("reparameterization"):
             self.z_sample = self.mu + tf.exp(self.log_var / 2.) * tf.random_normal(shape=tf.shape(self.mu))
+            self.q_z_sample = self.p_mu + tf.exp(self.p_log_var / 2.) * tf.random_normal(shape=tf.shape(self.p_mu))
 
         with tf.variable_scope("decoder_train") as decoder_scope:
             if decoder_layer == 2:
@@ -116,13 +123,13 @@ class CVAE(object):
             decoder = tf.contrib.seq2seq.BasicDecoder(
                 self.decoder_cell, helper, decoder_initial_state,
                 output_layer=self.projection_layer)
-            self.outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+            train_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
                 decoder,
                 output_time_major=True,
                 swap_memory=True,
                 scope=decoder_scope
             )
-            self.logits = self.outputs.rnn_output
+            self.logits = train_outputs.rnn_output
 
         with tf.variable_scope("decoder_infer") as decoder_scope:
             normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
@@ -162,7 +169,7 @@ class CVAE(object):
                 )
 
             # Dynamic decoding
-            outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+            infer_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
                 decoder,
                 maximum_iterations=maximum_iterations,
                 output_time_major=True,
@@ -170,9 +177,13 @@ class CVAE(object):
                 scope=decoder_scope
             )
             if beam_width > 0:
-                self.result = outputs.predicted_ids
+                self.result = infer_outputs.predicted_ids
             else:
-                self.result = outputs.sample_id
+                self.result = infer_outputs.sample_id
+
+        # self.logits = tf.cond(tf.equal(self.inferring, tf.constant(True)),
+        #                       lambda: infer_outputs.rnn_output,
+        #                       lambda: train_outputs.rnn_output)
 
         with tf.variable_scope("loss"):
             max_time = tf.shape(self.rep_output)[0]
@@ -189,13 +200,18 @@ class CVAE(object):
                 self.recon_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
             with tf.variable_scope("latent"):
-                self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
+                # self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
+                self.kl_loss = 0.5 * tf.reduce_sum(
+                    tf.exp(self.log_var-self.p_log_var) +
+                    (self.mu-self.p_mu) ** 2 / tf.exp(self.p_log_var) - 1. - self.log_var + self.p_log_var
+                    , 0)
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
             with tf.variable_scope("bow"):
                 # self.bow_loss = self.kl_weight * 0
                 mlp_b = layers_core.Dense(
                     vocab_size, use_bias=False, name="MLP_b")
+                # is it a mistake that we only model on latent variable
                 self.latent_logits = mlp_b(self.z_sample)                           # [batch_size, vocab_size]
                 self.latent_logits = tf.expand_dims(self.latent_logits, 0)          # [1, batch_size, vocab_size]
                 self.latent_logits = tf.tile(self.latent_logits, [max_time, 1, 1])  # [max_time, batch_size, vocab_size]
@@ -237,6 +253,7 @@ class CVAE(object):
 
             feed_dict = dict(zip(self.placeholders, batch))
             feed_dict[self.kl_weight] = 1.
+            # feed_dict[self.inferring] = True
 
             gen_digits, recon_loss, kl_loss, bow_loss = sess.run(
                 [self.result, self.recon_loss, self.kl_loss, self.bow_loss],
