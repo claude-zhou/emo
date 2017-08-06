@@ -5,8 +5,6 @@ from helpers import safe_exp
 from bleu import compute_bleu
 from tensorflow.python.layers import core as layers_core
 
-from time import gmtime, strftime
-
 class CVAE(object):
     def __init__(self,
                  vocab_size,
@@ -58,28 +56,27 @@ class CVAE(object):
 
         with tf.variable_scope("embeddings"):
             # TODO: init from embedding
-            self.embedding = tf.Variable(
+            embed_coder = tf.Variable(
                 tf.random_normal([vocab_size, embed_size], - 0.5 / embed_size, 0.5 / embed_size), name='word_embedding',
                 dtype=tf.float32)
-            self.ori_emb = tf.nn.embedding_lookup(self.embedding, self.ori)  # [max_len, batch_size, embedding_size]
-            self.rep_emb = tf.nn.embedding_lookup(self.embedding, self.rep)
+            ori_emb = tf.nn.embedding_lookup(embed_coder, self.ori)  # [max_len, batch_size, embedding_size]
+            rep_emb = tf.nn.embedding_lookup(embed_coder, self.rep)
 
-            self.rep_input_emb = tf.nn.embedding_lookup(self.embedding, self.rep_input)
-            self.rep_output_emb = tf.nn.embedding_lookup(self.embedding, self.rep_output)
+            rep_input_emb = tf.nn.embedding_lookup(embed_coder, self.rep_input)
 
-            self.emoji_emb = tf.nn.embedding_lookup(self.embedding, self.emoji)  # [batch_size, embedding_size]
+            emoji_emb = tf.nn.embedding_lookup(embed_coder, self.emoji)  # [batch_size, embedding_size]
 
         with tf.variable_scope("original_tweet_encoder"):
             ori_encoder_state = self.build_bidirectional_rnn(
-                num_unit, self.ori_emb, self.ori_len, dtype=tf.float32)
+                num_unit, ori_emb, self.ori_len, dtype=tf.float32)
             ori_encoder_state_flat = self.flatten(ori_encoder_state)
 
         with tf.variable_scope("response_tweet_encoder"):
             rep_encoder_state = self.build_bidirectional_rnn(
-                num_unit, self.rep_emb, self.rep_len, dtype=tf.float32)
+                num_unit, rep_emb, self.rep_len, dtype=tf.float32)
             rep_encoder_state_flat = self.flatten(rep_encoder_state)
 
-        emoji_vec = tf.layers.dense(self.emoji_emb, emoji_dim, activation=tf.nn.tanh)
+        emoji_vec = tf.layers.dense(emoji_emb, emoji_dim, activation=tf.nn.tanh)
         condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("representation_network"):
@@ -101,7 +98,7 @@ class CVAE(object):
 
         with tf.variable_scope("decoder_train") as decoder_scope:
             if decoder_layer == 2:
-                decoder_initial_state = (
+                train_decoder_init_state = (
                     tf.concat([self.z_sample, ori_encoder_state[0], emoji_vec], axis=1),
                     tf.concat([self.z_sample, ori_encoder_state[1], emoji_vec], axis=1)
                 )
@@ -109,20 +106,20 @@ class CVAE(object):
                 decoder_cell_no_drop = tf.nn.rnn_cell.MultiRNNCell(
                     [self.create_rnn_cell(dim, 0, False), self.create_rnn_cell(dim, 1, False)])
             else:
-                decoder_initial_state = tf.concat([self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1)
+                train_decoder_init_state = tf.concat([self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1)
                 dim = latent_dim + 2 * num_unit + emoji_dim
                 decoder_cell_no_drop = self.create_rnn_cell(dim, 0, False)
 
-            self.decoder_cell = tf.contrib.rnn.DropoutWrapper(
+            decoder_cell = tf.contrib.rnn.DropoutWrapper(
                 cell=decoder_cell_no_drop, input_keep_prob=(1.0 - self.dropout))
 
             helper = tf.contrib.seq2seq.TrainingHelper(
-                self.rep_input_emb, self.rep_len + 1, time_major=True)
-            self.projection_layer = layers_core.Dense(
+                rep_input_emb, self.rep_len + 1, time_major=True)
+            projection_layer = layers_core.Dense(
                 vocab_size, use_bias=False, name="output_projection")
             decoder = tf.contrib.seq2seq.BasicDecoder(
-                self.decoder_cell, helper, decoder_initial_state,
-                output_layer=self.projection_layer)
+                decoder_cell, helper, train_decoder_init_state,
+                output_layer=projection_layer)
             train_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
                 decoder,
                 output_time_major=True,
@@ -132,40 +129,40 @@ class CVAE(object):
             self.logits = train_outputs.rnn_output
 
         with tf.variable_scope("decoder_infer") as decoder_scope:
-            normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
+            # normal_sample = tf.random_normal(shape=(batch_size, latent_dim))
 
             if decoder_layer == 2:
-                self.decoder_initial_state = (
-                    tf.concat([normal_sample, ori_encoder_state[0], emoji_vec], axis=1),
-                    tf.concat([normal_sample, ori_encoder_state[1], emoji_vec], axis=1)
+                infer_decoder_init_state = (
+                    tf.concat([self.q_z_sample, ori_encoder_state[0], emoji_vec], axis=1),
+                    tf.concat([self.q_z_sample, ori_encoder_state[1], emoji_vec], axis=1)
                 )
             else:
-                self.decoder_initial_state = tf.concat([normal_sample, ori_encoder_state_flat, emoji_vec], axis=1)
+                infer_decoder_init_state = tf.concat([self.q_z_sample, ori_encoder_state_flat, emoji_vec], axis=1)
 
             start_tokens = tf.fill([batch_size], start_i)
             end_token = end_i
 
             if beam_width > 0:
                 # Replicate encoder info beam_width times
-                self.decoder_initial_state = tf.contrib.seq2seq.tile_batch(
-                    self.decoder_initial_state, multiplier=beam_width)
+                infer_decoder_init_state = tf.contrib.seq2seq.tile_batch(
+                    infer_decoder_init_state, multiplier=beam_width)
                 decoder = tf.contrib.seq2seq.BeamSearchDecoder(
                     cell=decoder_cell_no_drop,
-                    embedding=self.embedding,
+                    embedding=embed_coder,
                     start_tokens=start_tokens,
                     end_token=end_token,
-                    initial_state=self.decoder_initial_state,
+                    initial_state=infer_decoder_init_state,
                     beam_width=beam_width,
-                    output_layer=self.projection_layer,
+                    output_layer=projection_layer,
                     length_penalty_weight=0.0)
             else:
                 helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
-                    self.embedding, start_tokens, end_token)
+                    embed_coder, start_tokens, end_token)
                 decoder = tf.contrib.seq2seq.BasicDecoder(
                     decoder_cell_no_drop,
                     helper,
-                    self.decoder_initial_state,
-                    output_layer=self.projection_layer  # applied per timestep
+                    infer_decoder_init_state,
+                    output_layer=projection_layer  # applied per timestep
                 )
 
             # Dynamic decoding
@@ -188,7 +185,7 @@ class CVAE(object):
         with tf.variable_scope("loss"):
             max_time = tf.shape(self.rep_output)[0]
             with tf.variable_scope("reconstruction"):
-                # TODO: check if loss calculation correct! need SCRUTINY into its shape
+                # TODO: use inference decoder's logits to compute recon_loss
                 cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
                     labels=self.rep_output, logits=self.logits)
                 # rep: [len, batch_size]; logits: [len, batch_size, vocab_size]
@@ -196,10 +193,10 @@ class CVAE(object):
                     self.rep_len + 1, max_time, dtype=self.logits.dtype)
                 # time_major
                 target_mask_t = tf.transpose(target_mask)
-                # self.recon_loss = tf.reduce_mean(tf.reduce_sum(cross_entropy * target_mask_t, axis=0))
                 self.recon_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
             with tf.variable_scope("latent"):
+                # without prior network
                 # self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
                 self.kl_loss = 0.5 * tf.reduce_sum(
                     tf.exp(self.log_var-self.p_log_var) +
@@ -211,13 +208,14 @@ class CVAE(object):
                 # self.bow_loss = self.kl_weight * 0
                 mlp_b = layers_core.Dense(
                     vocab_size, use_bias=False, name="MLP_b")
-                # is it a mistake that we only model on latent variable
-                self.latent_logits = mlp_b(self.z_sample)                           # [batch_size, vocab_size]
-                self.latent_logits = tf.expand_dims(self.latent_logits, 0)          # [1, batch_size, vocab_size]
-                self.latent_logits = tf.tile(self.latent_logits, [max_time, 1, 1])  # [max_time, batch_size, vocab_size]
+                # is it a mistake that we only model on latent variable?
+                latent_logits = mlp_b(tf.concat(
+                    [self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1))    # [batch_size, vocab_size]
+                latent_logits = tf.expand_dims(latent_logits, 0)          # [1, batch_size, vocab_size]
+                latent_logits = tf.tile(latent_logits, [max_time, 1, 1])  # [max_time, batch_size, vocab_size]
 
                 cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
-                    labels=self.rep_output, logits=self.latent_logits)
+                    labels=self.rep_output, logits=latent_logits)
                 self.bow_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
 
             self.loss = tf.reduce_mean(
@@ -248,9 +246,6 @@ class CVAE(object):
         word_count = 0
 
         for batch in batches:
-            # time_now = strftime("%m-%d %H:%M:%S", gmtime())
-            # print(time_now)
-
             feed_dict = dict(zip(self.placeholders, batch))
             feed_dict[self.kl_weight] = 1.
             # feed_dict[self.inferring] = True
