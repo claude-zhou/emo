@@ -72,11 +72,12 @@ if __name__ == '__main__':
         output test eval every 10 x *test_step*
         output train eval every epoch""")
 
-    # dirs
     nmt_parser.add_argument("--input_dir", type=str, required=True,)
 
     nmt_parser.add_argument("--param_set", type=str, required=True, help="""\
             tiny/medium/full""")
+
+    nmt_parser.add_argument("--log_fname", type=str, default="log")
 
     FLAGS, _ = nmt_parser.parse_known_args()
 
@@ -109,7 +110,7 @@ if __name__ == '__main__':
             s = str(key) + " = " + str(var) + "\n"
             f.write(s)
 
-    log_f = open(join(output_dir, "log.txt"), "w")
+    log_f = open(join(output_dir, "%s.log" % FLAGS.log_fname), "w")
 
     # build vocab
     word2index, index2word = build_vocab(join(input_dir, vocab_f))
@@ -140,12 +141,13 @@ if __name__ == '__main__':
             best_bleu = 0.
             sess.run(tf.global_variables_initializer())
         else:
-            best_f = join(FLAGS.recover_from_dir, "best_bleu.txt")
+            recover_dir = join(input_dir, FLAGS.recover_from_dir)
+            best_f = join(recover_dir, "best_bleu.txt")
             best_bleu, best_epoch, best_step = restore_best(best_f)
             global_step = best_step
             start_epoch = best_epoch
 
-            best_dir = join(FLAGS.recover_from_dir, "breakpoints/best_test_bleu.ckpt")
+            best_dir = join(recover_dir, "breakpoints/best_test_bleu.ckpt")
             saver.restore(sess, best_dir)
 
         # generate_graph()
