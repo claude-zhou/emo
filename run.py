@@ -136,14 +136,18 @@ if __name__ == '__main__':
         total_step = (FLAGS.num_epoch * len(train_data[0]) / batch_size)
         if FLAGS.recover_from_dir == "":
             best_f = join(output_dir, "best_bleu.txt")
+
             global_step = best_step = 1
             start_epoch = best_epoch = 1
             best_bleu = 0.
             sess.run(tf.global_variables_initializer())
         else:
+            best_f = join(output_dir, "best_bleu.txt")
+
             recover_dir = join(input_dir, FLAGS.recover_from_dir)
-            best_f = join(recover_dir, "best_bleu.txt")
-            best_bleu, best_epoch, best_step = restore_best(best_f)
+            recover_best_f = join(recover_dir, "best_bleu.txt")
+            best_bleu, best_epoch, best_step = restore_best(recover_best_f)
+
             global_step = best_step
             start_epoch = best_epoch
 
