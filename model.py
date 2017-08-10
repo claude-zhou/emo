@@ -25,17 +25,14 @@ class CVAE(object):
                  lr=1e-3,
                  dropout=0.2,
                  num_gpu=2,
-                 cell_type=tf.nn.rnn_cell.GRUCell):
+                 cell_type=tf.nn.rnn_cell.GRUCell,
+                 is_seq2seq=False):
         self.end_i = end_i
         self.batch_size = batch_size
-
         self.num_gpu = num_gpu
-
         self.num_unit = num_unit
         self.dropout = dropout
-
         self.beam_width = beam_width
-
         self.cell_type = cell_type
 
         self.emoji = tf.placeholder(tf.int32, shape=[batch_size], name="emoji")
@@ -72,23 +69,23 @@ class CVAE(object):
                 num_unit, ori_emb, self.ori_len, dtype=tf.float32)
             ori_encoder_state_flat = self.flatten(ori_encoder_state)
 
+        emoji_vec = tf.layers.dense(emoji_emb, emoji_dim, activation=tf.nn.tanh)
+        # emoji_vec = tf.ones([batch_size, emoji_dim], tf.float32)
+        condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
+
         with tf.variable_scope("response_tweet_encoder"):
             rep_encoder_state = self.build_bidirectional_rnn(
                 num_unit, rep_emb, self.rep_len, dtype=tf.float32)
             rep_encoder_state_flat = self.flatten(rep_encoder_state)
-
-        emoji_vec = tf.layers.dense(emoji_emb, emoji_dim, activation=tf.nn.tanh)
-        # emoji_vec = tf.ones([batch_size, emoji_dim], tf.float32)
-        condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("representation_network"):
             rn_input = tf.concat([rep_encoder_state_flat, condition_flat], axis=1)
             # simpler representation network
             # r_hidden = rn_input
             r_hidden = tf.layers.dense(
-                rn_input, latent_dim, activation=tf.nn.relu, name="r_net_hidden") #int(1.6 * latent_dim)
+                rn_input, latent_dim, activation=tf.nn.relu, name="r_net_hidden")  # int(1.6 * latent_dim)
             r_hidden_mu = tf.layers.dense(
-                r_hidden, latent_dim, activation=tf.nn.relu) #int(1.3 * latent_dim)
+                r_hidden, latent_dim, activation=tf.nn.relu)  # int(1.3 * latent_dim)
             r_hidden_var = tf.layers.dense(
                 r_hidden, latent_dim, activation=tf.nn.relu)
             self.mu = tf.layers.dense(
@@ -113,6 +110,10 @@ class CVAE(object):
         with tf.variable_scope("reparameterization"):
             self.z_sample = self.mu + tf.exp(self.log_var / 2.) * tf.random_normal(shape=tf.shape(self.mu))
             self.q_z_sample = self.p_mu + tf.exp(self.p_log_var / 2.) * tf.random_normal(shape=tf.shape(self.p_mu))
+
+        if is_seq2seq:  # vanilla seq2seq
+            self.z_sample = self.z_sample - self.z_sample
+            self.q_z_sample = self.q_z_sample - self.q_z_sample
 
         with tf.variable_scope("decoder_train") as decoder_scope:
             if decoder_layer == 2:
@@ -196,10 +197,6 @@ class CVAE(object):
             else:
                 self.result = infer_outputs.sample_id
 
-        # self.logits = tf.cond(tf.equal(self.inferring, tf.constant(True)),
-        #                       lambda: infer_outputs.rnn_output,
-        #                       lambda: train_outputs.rnn_output)
-
         with tf.variable_scope("loss"):
             max_time = tf.shape(self.rep_output)[0]
             with tf.variable_scope("reconstruction"):
@@ -217,8 +214,8 @@ class CVAE(object):
                 # without prior network
                 # self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
                 self.kl_loss = 0.5 * tf.reduce_sum(
-                    tf.exp(self.log_var-self.p_log_var) +
-                    (self.mu-self.p_mu) ** 2 / tf.exp(self.p_log_var) - 1. - self.log_var + self.p_log_var
+                    tf.exp(self.log_var - self.p_log_var) +
+                    (self.mu - self.p_mu) ** 2 / tf.exp(self.p_log_var) - 1. - self.log_var + self.p_log_var
                     , 0)
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
@@ -228,13 +225,17 @@ class CVAE(object):
                     vocab_size, use_bias=False, name="MLP_b")
                 # is it a mistake that we only model on latent variable?
                 latent_logits = mlp_b(tf.concat(
-                    [self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1))    # [batch_size, vocab_size]
-                latent_logits = tf.expand_dims(latent_logits, 0)          # [1, batch_size, vocab_size]
+                    [self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1))  # [batch_size, vocab_size]
+                latent_logits = tf.expand_dims(latent_logits, 0)  # [1, batch_size, vocab_size]
                 latent_logits = tf.tile(latent_logits, [max_time, 1, 1])  # [max_time, batch_size, vocab_size]
 
                 cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(  # ce = [len, batch_size]
                     labels=self.rep_output, logits=latent_logits)
                 self.bow_loss = tf.reduce_sum(cross_entropy * target_mask_t) / batch_size
+
+            if is_seq2seq:
+                self.kl_loss = self.kl_loss - self.kl_loss
+                self.bow_loss = self.bow_loss - self.bow_loss
 
             self.loss = tf.reduce_mean(
                 self.recon_loss + self.kl_loss * self.kl_weight * kl_ceiling + self.bow_loss * bow_ceiling)
@@ -248,7 +249,6 @@ class CVAE(object):
 
             # Optimization
             optimizer = tf.train.AdamOptimizer(lr)
-            # optimizer_2 = YFOptimizer(learning_rate=0.1, momentum=0.0)
             self.update_step = optimizer.apply_gradients(
                 zip(clipped_gradients, params))
 

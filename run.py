@@ -73,11 +73,11 @@ if __name__ == '__main__':
         output train eval every epoch""")
 
     cvae_parser.add_argument("--input_dir", type=str, required=True, )
-
     cvae_parser.add_argument("--param_set", type=str, required=True, help="""\
             tiny/medium/full""")
-
     cvae_parser.add_argument("--log_fname", type=str, default="log")
+    cvae_parser.add_argument("--is_seq2seq", action="store_true", help="""\
+            CVAE model or vanilla seq2seq with similar settings""")
 
     FLAGS, _ = cvae_parser.parse_known_args()
 
@@ -120,7 +120,8 @@ if __name__ == '__main__':
     # building graph
     cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, emoji_dim, batch_size,
                 FLAGS.kl_ceiling, FLAGS.bow_ceiling, decoder_layer,
-                start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout, num_gpu, cell_type)
+                start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout, num_gpu, cell_type,
+                FLAGS.is_seq2seq)
 
     # building data
     train_data = build_data(train_ori_f, train_rep_f, word2index)
