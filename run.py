@@ -54,32 +54,32 @@ def get_kl_weight(global_step, total_step, ratio):
 
 if __name__ == '__main__':
 
-    nmt_parser = argparse.ArgumentParser()
-    nmt_parser.add_argument("--anneal_ratio", type=float, required=True, help="""\
+    cvae_parser = argparse.ArgumentParser()
+    cvae_parser.add_argument("--anneal_ratio", type=float, required=True, help="""\
         hyper param for KL annealing:
         weight of kl_loss rises to 1 after *anneal_ratio* of global steps""")
-    nmt_parser.add_argument("--kl_ceiling", type=float, default=1., help="""\
+    cvae_parser.add_argument("--kl_ceiling", type=float, default=1., help="""\
         param that limit kl_loss proportion in the total loss""")
-    nmt_parser.add_argument("--bow_ceiling", type=float, default=1., help="""\
+    cvae_parser.add_argument("--bow_ceiling", type=float, default=1., help="""\
         param that limit bow_loss proportion in the total loss""")
-    nmt_parser.add_argument("--recover_from_dir", type=str, default="", help="""\
+    cvae_parser.add_argument("--recover_from_dir", type=str, default="", help="""\
         run from scratch or from previous breakpoint of best bleu score""")
 
     # hyper params for running the graph
-    nmt_parser.add_argument("--num_epoch", type=int, required=True,)
-    nmt_parser.add_argument("--test_step", type=int, required=True, help="""\
+    cvae_parser.add_argument("--num_epoch", type=int, required=True, )
+    cvae_parser.add_argument("--test_step", type=int, required=True, help="""\
         output batch eval every *test_step*
         output test eval every 10 x *test_step*
         output train eval every epoch""")
 
-    nmt_parser.add_argument("--input_dir", type=str, required=True,)
+    cvae_parser.add_argument("--input_dir", type=str, required=True, )
 
-    nmt_parser.add_argument("--param_set", type=str, required=True, help="""\
+    cvae_parser.add_argument("--param_set", type=str, required=True, help="""\
             tiny/medium/full""")
 
-    nmt_parser.add_argument("--log_fname", type=str, default="log")
+    cvae_parser.add_argument("--log_fname", type=str, default="log")
 
-    FLAGS, _ = nmt_parser.parse_known_args()
+    FLAGS, _ = cvae_parser.parse_known_args()
 
     if FLAGS.param_set == "tiny":
         from param_tiny import *
@@ -215,7 +215,7 @@ if __name__ == '__main__':
         saver.restore(sess, path)
 
         """GENERATE"""
-        # TRAIN
+        # TRAIN SET
         train_batches = batch_generator(
             train_data, start_i, end_i, batch_size, permutate=False)
         (train_recon_loss, train_kl_loss, train_bow_loss,
@@ -223,7 +223,7 @@ if __name__ == '__main__':
         write_out(train_out_f, generation_corpus)
         print_out("BEST TRAIN BLEU: %.1f" % train_bleu_score, f=log_f)
 
-        # TEST
+        # TEST SET
         generation_corpus = cvae.infer_and_eval(test_batches, sess)[-1]
         write_out(test_out_f, generation_corpus)
 

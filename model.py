@@ -78,6 +78,7 @@ class CVAE(object):
             rep_encoder_state_flat = self.flatten(rep_encoder_state)
 
         emoji_vec = tf.layers.dense(emoji_emb, emoji_dim, activation=tf.nn.tanh)
+        # emoji_vec = tf.ones([batch_size, emoji_dim], tf.float32)
         condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("representation_network"):
@@ -85,11 +86,11 @@ class CVAE(object):
             # simpler representation network
             # r_hidden = rn_input
             r_hidden = tf.layers.dense(
-                rn_input, int(1.6 * latent_dim), activation=tf.nn.relu, name="r_net_hidden")
+                rn_input, latent_dim, activation=tf.nn.relu, name="r_net_hidden") #int(1.6 * latent_dim)
             r_hidden_mu = tf.layers.dense(
-                r_hidden, int(1.3 * latent_dim), activation=tf.nn.relu)
+                r_hidden, latent_dim, activation=tf.nn.relu) #int(1.3 * latent_dim)
             r_hidden_var = tf.layers.dense(
-                r_hidden, int(1.3 * latent_dim), activation=tf.nn.relu)
+                r_hidden, latent_dim, activation=tf.nn.relu)
             self.mu = tf.layers.dense(
                 r_hidden_mu, latent_dim, activation=tf.nn.tanh, name="q_mean")
             self.log_var = tf.layers.dense(
@@ -99,11 +100,11 @@ class CVAE(object):
             # simpler prior network
             # p_hidden = condition_flat
             p_hidden = tf.layers.dense(
-                condition_flat, latent_dim, activation=tf.nn.relu, name="r_net_hidden")
+                condition_flat, int(0.62 * latent_dim), activation=tf.nn.relu, name="r_net_hidden")
             p_hidden_mu = tf.layers.dense(
-                p_hidden, latent_dim, activation=tf.nn.relu)
+                p_hidden, int(0.77 * latent_dim), activation=tf.nn.relu)
             p_hidden_var = tf.layers.dense(
-                p_hidden, latent_dim, activation=tf.nn.relu)
+                p_hidden, int(0.77 * latent_dim), activation=tf.nn.relu)
             self.p_mu = tf.layers.dense(
                 p_hidden_mu, latent_dim, activation=tf.nn.tanh, name="p_mean")
             self.p_log_var = tf.layers.dense(
@@ -323,6 +324,7 @@ class CVAE(object):
                 [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
 
     def build_bidirectional_rnn(self, num_dim, inputs, sequence_length, dtype, base_gpu=0):
+        # TODO: move rnn cell creation functions to a separate file
         # Construct forward and backward cells
         fw_cell = self.create_rnn_cell(num_dim, base_gpu)
         bw_cell = self.create_rnn_cell(num_dim, (base_gpu + 1))

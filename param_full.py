@@ -2,9 +2,9 @@ import tensorflow as tf
 
 """hyper params for building the graph"""
 batch_size = 128   #
-num_unit = 200      # num_unit should be equal to embed_size
+num_unit = 400      # num_unit should be equal to embed_size
 embed_size = 200    #
-latent_dim = 400    #
+latent_dim = 820    #
 num_gpu = 1
 emoji_dim = 20
 
