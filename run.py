@@ -2,8 +2,9 @@
 # TODO-2: print a random generation every epoch
 # TODO-3: add tricks proposed by Google MT
 
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
+
 tf.logging.set_verbosity(tf.logging.DEBUG)
 
 from helpers import build_data, batch_generator, print_out, build_vocab
@@ -12,7 +13,7 @@ import json
 from time import gmtime, strftime
 
 from os import makedirs
-from os.path import join, dirname, isfile
+from os.path import join, dirname
 
 from math import tanh
 
@@ -62,8 +63,7 @@ if __name__ == '__main__':
         param that limit kl_loss proportion in the total loss""")
     cvae_parser.add_argument("--bow_ceiling", type=float, default=1., help="""\
         param that limit bow_loss proportion in the total loss""")
-    cvae_parser.add_argument("--recover_from_dir", type=str, default="", help="""\
-        run from scratch or from previous breakpoint of best bleu score""")
+    cvae_parser.add_argument("--init_from_dir", type=str, default="")
 
     # hyper params for running the graph
     cvae_parser.add_argument("--num_epoch", type=int, required=True, )
@@ -82,11 +82,11 @@ if __name__ == '__main__':
     FLAGS, _ = cvae_parser.parse_known_args()
 
     if FLAGS.param_set == "tiny":
-        from param_tiny import *
+        from params.tiny import *
     elif FLAGS.param_set == "full":
-        from param_full import *
+        from params.full import *
     elif FLAGS.param_set == "medium":
-        from param_medium import *
+        from params.medium import *
 
     output_dir_name = strftime("%m-%d_%H-%M-%S", gmtime())
 
@@ -135,23 +135,16 @@ if __name__ == '__main__':
     saver = tf.train.Saver()
     with tf.Session() as sess:
         total_step = (FLAGS.num_epoch * len(train_data[0]) / batch_size)
-        if FLAGS.recover_from_dir == "":
-            best_f = join(output_dir, "best_bleu.txt")
 
-            global_step = best_step = 1
-            start_epoch = best_epoch = 1
-            best_bleu = 0.
+        best_f = join(output_dir, "best_bleu.txt")
+        global_step = best_step = 1
+        start_epoch = best_epoch = 1
+        best_bleu = 0.
+
+        if FLAGS.recover_from_dir == "":
             sess.run(tf.global_variables_initializer())
         else:
-            best_f = join(output_dir, "best_bleu.txt")
-
             recover_dir = join(input_dir, FLAGS.recover_from_dir)
-            recover_best_f = join(recover_dir, "best_bleu.txt")
-            best_bleu, best_epoch, best_step = restore_best(recover_best_f)
-
-            global_step = best_step
-            start_epoch = best_epoch
-
             best_dir = join(recover_dir, "breakpoints/best_test_bleu.ckpt")
             saver.restore(sess, best_dir)
 
