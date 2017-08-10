@@ -5,6 +5,21 @@ import math
 import sys
 
 """build data"""
+def build_emoji_index(vocab_path, emoji_list):
+    vocab_file = open(vocab_path, encoding="utf-8")
+    vocab_data = vocab_file.readlines()
+    vocab_file.close()
+
+    i = 0
+    emoji_index = {}
+    for index, line in enumerate(vocab_data):
+        word = line.rstrip()
+        if word in emoji_list:
+            emoji_index[index] = i
+            i += 1
+    assert i == 64
+    return emoji_index
+
 def build_vocab(vocab_path):
     vocab_file = open(vocab_path, encoding="utf-8")
     vocab_data = vocab_file.readlines()
