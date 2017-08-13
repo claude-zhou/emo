@@ -4,7 +4,7 @@ import numpy as np
 from helpers import safe_exp
 from bleu import compute_bleu
 from tensorflow.python.layers import core as layers_core
-from model_helpers import Embedding
+from model_helpers import Embedding, build_bidirectional_rnn, create_rnn_cell
 from yellowfin import YFOptimizer
 
 import tensorflow.contrib.seq2seq as seq2seq
@@ -64,18 +64,20 @@ class CVAE(object):
             emoji_emb = embedding(self.emoji)  # [batch_size, embedding_size]
 
         with tf.variable_scope("original_tweet_encoder"):
-            ori_encoder_output, ori_encoder_state = self.build_bidirectional_rnn(
-                num_unit, ori_emb, self.ori_len, dtype=tf.float32)
-            ori_encoder_state_flat = self.flatten(ori_encoder_state)
+            ori_encoder_output, ori_encoder_state = build_bidirectional_rnn(
+                num_unit, ori_emb, self.ori_len, cell_type, num_gpu, tf.float32)
+            ori_encoder_state_flat = tf.concat(
+                [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
 
         emoji_vec = tf.layers.dense(emoji_emb, emoji_dim, activation=tf.nn.tanh)
         # emoji_vec = tf.ones([batch_size, emoji_dim], tf.float32)
         condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("response_tweet_encoder"):
-            _, rep_encoder_state = self.build_bidirectional_rnn(
-                num_unit, rep_emb, self.rep_len, dtype=tf.float32)
-            rep_encoder_state_flat = self.flatten(rep_encoder_state)
+            _, rep_encoder_state = build_bidirectional_rnn(
+                num_unit, rep_emb, self.rep_len, cell_type, num_gpu, tf.float32)
+            rep_encoder_state_flat = tf.concat(
+                [rep_encoder_state[0], rep_encoder_state[1]], axis=1)
 
         with tf.variable_scope("representation_network"):
             rn_input = tf.concat([rep_encoder_state_flat, condition_flat], axis=1)
@@ -129,11 +131,12 @@ class CVAE(object):
                 )
                 dim = latent_dim + num_unit + emoji_dim
                 decoder_cell_no_drop = tf.nn.rnn_cell.MultiRNNCell(
-                    [self.create_rnn_cell(dim, 0, False), self.create_rnn_cell(dim, 1, False)])
+                    [create_rnn_cell(dim, 0, cell_type, num_gpu),
+                     create_rnn_cell(dim, 1, cell_type, num_gpu)])
             else:
                 train_decoder_init_state = tf.concat([self.z_sample, ori_encoder_state_flat, emoji_vec], axis=1)
                 dim = latent_dim + 2 * num_unit + emoji_dim
-                decoder_cell_no_drop = self.create_rnn_cell(dim, 0, False)
+                decoder_cell_no_drop = create_rnn_cell(dim, 0, cell_type, num_gpu)
 
             decoder_cell_no_drop = seq2seq.AttentionWrapper(
                 decoder_cell_no_drop,
@@ -228,8 +231,8 @@ class CVAE(object):
                 # self.kl_loss = 0.5 * tf.reduce_sum(tf.exp(self.log_var) + self.mu ** 2 - 1. - self.log_var, 0)
                 self.kl_loss = 0.5 * tf.reduce_sum(
                     tf.exp(self.log_var - self.p_log_var) +
-                    (self.mu - self.p_mu) ** 2 / tf.exp(self.p_log_var) - 1. - self.log_var + self.p_log_var
-                    , 0)
+                    (self.mu - self.p_mu) ** 2 / tf.exp(self.p_log_var) - 1. - self.log_var + self.p_log_var,
+                    axis=0)
                 self.kl_loss = tf.reduce_mean(self.kl_loss)
 
             with tf.variable_scope("bow"):
@@ -331,33 +334,3 @@ class CVAE(object):
         _, recon_loss, kl_loss, bow_loss = sess.run(
             [self.update_step, self.recon_loss, self.kl_loss, self.bow_loss], feed_dict=feed_dict)
         return recon_loss, kl_loss, bow_loss
-
-    def flatten(self, ori_encoder_state):
-        return tf.concat(
-                [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
-
-    def build_bidirectional_rnn(self, num_dim, inputs, sequence_length, dtype, base_gpu=0):
-        # TODO: move rnn cell creation functions to a separate file
-        # Construct forward and backward cells
-        fw_cell = self.create_rnn_cell(num_dim, base_gpu)
-        bw_cell = self.create_rnn_cell(num_dim, (base_gpu + 1))
-
-        bi_output, bi_state = tf.nn.bidirectional_dynamic_rnn(
-            fw_cell,
-            bw_cell,
-            inputs,
-            dtype=dtype,
-            sequence_length=sequence_length,
-            time_major=True)
-
-        return bi_output, bi_state
-
-    def create_rnn_cell(self, num_dim, base_gpu, drop=True):
-        # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
-        device_str = "/gpu:%d" % (base_gpu % self.num_gpu)
-        print(device_str)
-        single_cell = self.cell_type(num_dim)
-        single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
-        if drop:
-            single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
-        return single_cell
