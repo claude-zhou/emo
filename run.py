@@ -103,7 +103,7 @@ if __name__ == '__main__':
 
     makedirs(dirname(join(output_dir, "breakpoints/")), exist_ok=True)
     with open(join(output_dir, "hparams.txt"), "w") as f:
-        with open("param_%s.py" % FLAGS.param_set) as ff:
+        with open("params/%s.py" % FLAGS.param_set) as ff:
             content = ff.read()
         f.write(content + "\n")
         for key, var in vars(FLAGS).items():
@@ -141,10 +141,10 @@ if __name__ == '__main__':
         start_epoch = best_epoch = 1
         best_bleu = 0.
 
-        if FLAGS.recover_from_dir == "":
+        if FLAGS.init_from_dir == "":
             sess.run(tf.global_variables_initializer())
         else:
-            recover_dir = join(input_dir, FLAGS.recover_from_dir)
+            recover_dir = join(input_dir, FLAGS.init_from_dir)
             best_dir = join(recover_dir, "breakpoints/best_test_bleu.ckpt")
             saver.restore(sess, best_dir)
 

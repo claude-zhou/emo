@@ -48,14 +48,22 @@ def build_data(ori_path, rep_path, word2index):
     emojis = []
     ori_seqs = []
     rep_seqs = []
-    for line in ori_tweets:
-        words = line.split()
-        tweet = [word2index.get(word, unk_i) for word in words[1:]]
-        ori_seqs.append(tweet)
-        emojis.append(word2index.get(words[0], unk_i))
-    for line in rep_tweets:
-        tweet = [word2index.get(word, unk_i) for word in line.split()]
-        rep_seqs.append(tweet)
+
+    false_index = []
+    for i in range(len(ori_tweets)):
+        ori_words = ori_tweets[i].split()
+        ori_tweet = [word2index.get(word, unk_i) for word in ori_words[1:]]
+
+        rep_words = rep_tweets[i].split()
+        rep_tweet = [word2index.get(word, unk_i) for word in rep_words]
+
+        if len(ori_tweet) < 3 or len(rep_tweet) < 2:
+            continue
+
+        ori_seqs.append(ori_tweet)
+        rep_seqs.append(rep_tweet)
+        emojis.append(word2index.get(ori_words[0], unk_i))
+
     return [
         emojis,
         ori_seqs,
@@ -74,6 +82,8 @@ def generate_one_batch(data_l, start_i, end_i, s, e):
 
     ori_lengths = np.array([len(seq) for seq in ori_seqs[s:e]])
     max_ori_len = np.max(ori_lengths)
+    min_ori_len = np.min(ori_lengths)
+    assert(min_ori_len > 0)
     ori_matrix = np.zeros([max_ori_len, e - s], dtype=np.int32)
 
     for i, seq in enumerate(ori_seqs[s:e]):

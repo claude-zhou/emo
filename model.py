@@ -6,6 +6,8 @@ from bleu import compute_bleu
 from tensorflow.python.layers import core as layers_core
 from yellowfin import YFOptimizer
 
+import tensorflow.contrib.seq2seq as seq2seq
+
 class CVAE(object):
     def __init__(self,
                  vocab_size,
@@ -65,7 +67,7 @@ class CVAE(object):
             emoji_emb = tf.nn.embedding_lookup(embed_coder, self.emoji)  # [batch_size, embedding_size]
 
         with tf.variable_scope("original_tweet_encoder"):
-            ori_encoder_state = self.build_bidirectional_rnn(
+            ori_encoder_output, ori_encoder_state = self.build_bidirectional_rnn(
                 num_unit, ori_emb, self.ori_len, dtype=tf.float32)
             ori_encoder_state_flat = self.flatten(ori_encoder_state)
 
@@ -74,7 +76,7 @@ class CVAE(object):
         condition_flat = tf.concat([ori_encoder_state_flat, emoji_vec], axis=1)
 
         with tf.variable_scope("response_tweet_encoder"):
-            rep_encoder_state = self.build_bidirectional_rnn(
+            _, rep_encoder_state = self.build_bidirectional_rnn(
                 num_unit, rep_emb, self.rep_len, dtype=tf.float32)
             rep_encoder_state_flat = self.flatten(rep_encoder_state)
 
@@ -115,6 +117,13 @@ class CVAE(object):
             self.z_sample = self.z_sample - self.z_sample
             self.q_z_sample = self.q_z_sample - self.q_z_sample
 
+        with tf.variable_scope("attention"):
+            attention_state = tf.concat([ori_encoder_output[0], ori_encoder_output[1]], axis=2)
+            attention_state = tf.transpose(attention_state, [1, 0, 2])
+
+            attention_mechanism = seq2seq.BahdanauAttention(
+                num_unit, attention_state, memory_sequence_length=self.ori_len)
+
         with tf.variable_scope("decoder_train") as decoder_scope:
             if decoder_layer == 2:
                 train_decoder_init_state = (
@@ -129,17 +138,23 @@ class CVAE(object):
                 dim = latent_dim + 2 * num_unit + emoji_dim
                 decoder_cell_no_drop = self.create_rnn_cell(dim, 0, False)
 
+            decoder_cell_no_drop = seq2seq.AttentionWrapper(
+                decoder_cell_no_drop,
+                attention_mechanism,
+                attention_layer_size=None)
+
             decoder_cell = tf.contrib.rnn.DropoutWrapper(
                 cell=decoder_cell_no_drop, input_keep_prob=(1.0 - self.dropout))
 
-            helper = tf.contrib.seq2seq.TrainingHelper(
+            helper = seq2seq.TrainingHelper(
                 rep_input_emb, self.rep_len + 1, time_major=True)
             projection_layer = layers_core.Dense(
                 vocab_size, use_bias=False, name="output_projection")
-            decoder = tf.contrib.seq2seq.BasicDecoder(
-                decoder_cell, helper, train_decoder_init_state,
+            decoder = seq2seq.BasicDecoder(
+                decoder_cell, helper,
+                decoder_cell.zero_state(batch_size, tf.float32).clone(cell_state=train_decoder_init_state),
                 output_layer=projection_layer)
-            train_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+            train_outputs, _, _ = seq2seq.dynamic_decode(
                 decoder,
                 output_time_major=True,
                 swap_memory=True,
@@ -163,29 +178,30 @@ class CVAE(object):
 
             if beam_width > 0:
                 # Replicate encoder info beam_width times
-                infer_decoder_init_state = tf.contrib.seq2seq.tile_batch(
+                infer_decoder_init_state = seq2seq.tile_batch(
                     infer_decoder_init_state, multiplier=beam_width)
-                decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+                decoder = seq2seq.BeamSearchDecoder(
                     cell=decoder_cell_no_drop,
                     embedding=embed_coder,
                     start_tokens=start_tokens,
                     end_token=end_token,
-                    initial_state=infer_decoder_init_state,
+                    initial_state=decoder_cell_no_drop.zero_state(
+                        batch_size, tf.float32).clone(cell_state=infer_decoder_init_state),
                     beam_width=beam_width,
                     output_layer=projection_layer,
                     length_penalty_weight=0.0)
             else:
-                helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
+                helper = seq2seq.GreedyEmbeddingHelper(
                     embed_coder, start_tokens, end_token)
-                decoder = tf.contrib.seq2seq.BasicDecoder(
+                decoder = seq2seq.BasicDecoder(
                     decoder_cell_no_drop,
                     helper,
-                    infer_decoder_init_state,
+                    decoder_cell_no_drop.zero_state(batch_size, tf.float32).clone(cell_state=infer_decoder_init_state),
                     output_layer=projection_layer  # applied per timestep
                 )
 
             # Dynamic decoding
-            infer_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+            infer_outputs, _, _ = seq2seq.dynamic_decode(
                 decoder,
                 maximum_iterations=maximum_iterations,
                 output_time_major=True,
@@ -329,7 +345,7 @@ class CVAE(object):
         fw_cell = self.create_rnn_cell(num_dim, base_gpu)
         bw_cell = self.create_rnn_cell(num_dim, (base_gpu + 1))
 
-        _, bi_state = tf.nn.bidirectional_dynamic_rnn(
+        bi_output, bi_state = tf.nn.bidirectional_dynamic_rnn(
             fw_cell,
             bw_cell,
             inputs,
@@ -337,7 +353,7 @@ class CVAE(object):
             sequence_length=sequence_length,
             time_major=True)
 
-        return bi_state
+        return bi_output, bi_state
 
     def create_rnn_cell(self, num_dim, base_gpu, drop=True):
         # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
