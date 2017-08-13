@@ -9,6 +9,7 @@ import json
 from helpers import build_vocab, build_data, build_emoji_index, batch_generator
 from helpers import print_out
 from emoji_reader import emoji_64
+from model_helpers import Embedding
 
 class EmojiClassifier(object):
     def __init__(self,
@@ -33,12 +34,8 @@ class EmojiClassifier(object):
         xavier = tf.contrib.layers.xavier_initializer()
 
         with tf.variable_scope("embeddings"):
-            embed_coder = tf.Variable(
-                tf.random_normal([vocab_size, embed_size], -0.5/embed_size, 0.5/embed_size),
-                name='word_embedding',
-                dtype=tf.float32)
-            # [max_time, batch_size, embed_size]
-            text_emb = tf.nn.embedding_lookup(embed_coder, self.text)  # [batch_size, embedding_size]
+            embedding = Embedding(vocab_size, embed_size)
+            text_emb = embedding(self.text)
 
         with tf.variable_scope("bi_rnn_1"):  # difference between var scope and name scope?
             # tuple#2: [max_time, batch_size, num_unit]
@@ -186,6 +183,7 @@ if __name__ == '__main__':
     emoji_index = build_emoji_index(vocab_f, emoji_64)
 
     # building graph
+    # embedding of discriminator's classifier should be in another graph
     classifier = EmojiClassifier(batch_size, vocab_size, emoji_num, embed_size, num_unit, num_gpu)
 
     # building data

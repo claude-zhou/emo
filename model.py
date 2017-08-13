@@ -4,6 +4,7 @@ import numpy as np
 from helpers import safe_exp
 from bleu import compute_bleu
 from tensorflow.python.layers import core as layers_core
+from model_helpers import Embedding
 from yellowfin import YFOptimizer
 
 import tensorflow.contrib.seq2seq as seq2seq
@@ -55,16 +56,12 @@ class CVAE(object):
         ]
 
         with tf.variable_scope("embeddings"):
-            # TODO: init from embedding
-            embed_coder = tf.Variable(
-                tf.random_normal([vocab_size, embed_size], - 0.5 / embed_size, 0.5 / embed_size), name='word_embedding',
-                dtype=tf.float32)
-            ori_emb = tf.nn.embedding_lookup(embed_coder, self.ori)  # [max_len, batch_size, embedding_size]
-            rep_emb = tf.nn.embedding_lookup(embed_coder, self.rep)
+            embedding = Embedding(vocab_size, embed_size)
 
-            rep_input_emb = tf.nn.embedding_lookup(embed_coder, self.rep_input)
-
-            emoji_emb = tf.nn.embedding_lookup(embed_coder, self.emoji)  # [batch_size, embedding_size]
+            ori_emb = embedding(self.ori)  # [max_len, batch_size, embedding_size]
+            rep_emb = embedding(self.rep)
+            rep_input_emb = embedding(self.rep_input)
+            emoji_emb = embedding(self.emoji)  # [batch_size, embedding_size]
 
         with tf.variable_scope("original_tweet_encoder"):
             ori_encoder_output, ori_encoder_state = self.build_bidirectional_rnn(
@@ -182,7 +179,7 @@ class CVAE(object):
                     infer_decoder_init_state, multiplier=beam_width)
                 decoder = seq2seq.BeamSearchDecoder(
                     cell=decoder_cell_no_drop,
-                    embedding=embed_coder,
+                    embedding=embedding.coder,
                     start_tokens=start_tokens,
                     end_token=end_token,
                     initial_state=decoder_cell_no_drop.zero_state(
@@ -192,7 +189,7 @@ class CVAE(object):
                     length_penalty_weight=0.0)
             else:
                 helper = seq2seq.GreedyEmbeddingHelper(
-                    embed_coder, start_tokens, end_token)
+                    embedding.coder, start_tokens, end_token)
                 decoder = seq2seq.BasicDecoder(
                     decoder_cell_no_drop,
                     helper,
