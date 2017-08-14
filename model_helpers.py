@@ -1,11 +1,15 @@
 import tensorflow as tf
 
+xavier = tf.contrib.layers.xavier_initializer()
 
-def build_bidirectional_rnn(num_dim, inputs, sequence_length, cell_type, num_gpu, dtype, base_gpu=0):
+def build_bidirectional_rnn(
+        num_dim, inputs, sequence_length, cell_type, num_gpu, base_gpu=0, drop=None, dtype=tf.float32):
     # TODO: move rnn cell creation functions to a separate file
     # Construct forward and backward cells
-    fw_cell = create_rnn_cell(num_dim, base_gpu, cell_type, num_gpu)
-    bw_cell = create_rnn_cell(num_dim, (base_gpu + 1), cell_type, num_gpu)
+    fw_cell = create_rnn_cell(
+        num_dim, base_gpu, cell_type, num_gpu, drop)
+    bw_cell = create_rnn_cell(
+        num_dim, (base_gpu + 1), cell_type, num_gpu, drop)
 
     bi_output, bi_state = tf.nn.bidirectional_dynamic_rnn(
         fw_cell,

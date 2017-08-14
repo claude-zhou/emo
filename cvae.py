@@ -65,7 +65,7 @@ class CVAE(object):
 
         with tf.variable_scope("original_tweet_encoder"):
             ori_encoder_output, ori_encoder_state = build_bidirectional_rnn(
-                num_unit, ori_emb, self.ori_len, cell_type, num_gpu, tf.float32)
+                num_unit, ori_emb, self.ori_len, cell_type, num_gpu)
             ori_encoder_state_flat = tf.concat(
                 [ori_encoder_state[0], ori_encoder_state[1]], axis=1)
 
@@ -75,7 +75,7 @@ class CVAE(object):
 
         with tf.variable_scope("response_tweet_encoder"):
             _, rep_encoder_state = build_bidirectional_rnn(
-                num_unit, rep_emb, self.rep_len, cell_type, num_gpu, tf.float32)
+                num_unit, rep_emb, self.rep_len, cell_type, num_gpu)
             rep_encoder_state_flat = tf.concat(
                 [rep_encoder_state[0], rep_encoder_state[1]], axis=1)
 

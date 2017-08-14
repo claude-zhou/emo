@@ -9,7 +9,7 @@ import json
 from helpers import build_vocab, build_data, build_emoji_index, batch_generator
 from helpers import print_out
 from emoji_reader import emoji_64
-from model_helpers import Embedding
+from model_helpers import Embedding, xavier, build_bidirectional_rnn
 
 class EmojiClassifier(object):
     def __init__(self,
@@ -31,19 +31,19 @@ class EmojiClassifier(object):
         self.len = tf.placeholder(tf.int32, shape=[batch_size], name="text_length")
         self.emoji = tf.placeholder(tf.int32, shape=[batch_size], name="emoji_label")
 
-        xavier = tf.contrib.layers.xavier_initializer()
-
         with tf.variable_scope("embeddings"):
             embedding = Embedding(vocab_size, embed_size)
             text_emb = embedding(self.text)
 
         with tf.variable_scope("bi_rnn_1"):  # difference between var scope and name scope?
             # tuple#2: [max_time, batch_size, num_unit]
-            outputs_1, _ = self.build_bidirectional_rnn(num_unit, text_emb, self.len, dtype=tf.float32)
+            outputs_1, _ = build_bidirectional_rnn(
+                num_unit, text_emb, self.len, cell_type, num_gpu, drop=dropout)
 
         with tf.variable_scope("bi_rnn_2"):
             rnn2_input = tf.concat([outputs_1[0], outputs_1[1]], axis=2)
-            outputs_2, _ = self.build_bidirectional_rnn(num_unit, rnn2_input, self.len, dtype=tf.float32)
+            outputs_2, _ = build_bidirectional_rnn(
+                num_unit, rnn2_input, self.len, cell_type, num_gpu, drop=dropout)
 
         with tf.variable_scope("attention"):
             word_states = tf.concat(
@@ -82,29 +82,6 @@ class EmojiClassifier(object):
         with tf.variable_scope("optimization"):
             optimizer = tf.train.AdamOptimizer(lr)
             self.update_step = optimizer.minimize(self.loss)
-
-    def build_bidirectional_rnn(self, num_unit, inputs, length, dtype, base_gpu=0):
-        fw_cell = self.create_rnn_cell(num_unit, base_gpu)
-        bw_cell = self.create_rnn_cell(num_unit, (base_gpu + 1))
-        bi_outputs, bi_state = tf.nn.bidirectional_dynamic_rnn(
-            fw_cell,
-            bw_cell,
-            inputs,
-            dtype=dtype,
-            sequence_length=length,
-            time_major=True)
-
-        return bi_outputs, bi_state
-
-    def create_rnn_cell(self, num_dim, base_gpu, drop=True):
-        # dropout = dropout if mode == tf.contrib.learn.ModeKeys.TRAIN else 0.0
-        device_str = "/gpu:%d" % (base_gpu % self.num_gpu)
-        print(device_str)
-        single_cell = self.cell_type(num_dim)
-        single_cell = tf.contrib.rnn.DeviceWrapper(single_cell, device_str)
-        if drop:
-            single_cell = tf.contrib.rnn.DropoutWrapper(cell=single_cell, input_keep_prob=(1.0 - self.dropout))
-        return single_cell
 
     def train_update(self, batch, sess):
         sess = sess or sess.get_default_session()
