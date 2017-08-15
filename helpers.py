@@ -1,8 +1,10 @@
 import numpy as np
 import random
 import tensorflow as tf
+tf.logging.set_verbosity(tf.logging.DEBUG)
 import math
 import sys
+from time import gmtime, strftime
 
 """build data"""
 def build_emoji_index(vocab_path, emoji_list):
@@ -49,7 +51,6 @@ def build_data(ori_path, rep_path, word2index):
     ori_seqs = []
     rep_seqs = []
 
-    false_index = []
     for i in range(len(ori_tweets)):
         ori_words = ori_tweets[i].split()
         ori_tweet = [word2index.get(word, unk_i) for word in ori_words[1:]]
@@ -139,6 +140,70 @@ def batch_generator(data_l, start_i, end_i, batch_size, permutate=True):
         rtn.append(generate_one_batch(new_all, start_i, end_i, s, e))
     return rtn
 
+# for discriminator
+def build_dis_data(human_path, machine_path, word2index):
+    unk_i = word2index['<unk>']
+
+    with open(human_path, encoding="utf-8") as f:
+        human_tweets = f.readlines()
+
+    with open(machine_path, encoding="utf-8") as f:
+        machine_tweets = f.readlines()
+
+    seqs = []
+    for i in range(len(human_tweets)):
+        words = human_tweets[i].split()
+        tweet = [word2index.get(word, unk_i) for word in words]
+        if len(tweet) < 3:
+            continue
+        seqs.append(tweet)
+    labels = [0] * len(seqs)
+    for i in range(len(machine_tweets)):
+        words = machine_tweets[i].split()
+        tweet = [word2index.get(word, unk_i) for word in words]
+        if len(tweet) < 3:
+            continue
+        seqs.append(tweet)
+    labels += [1] * (len(seqs)-len(labels))
+
+    assert len(labels) == len(seqs)
+    return [seqs, labels]
+
+def generate_dis_batches(data_l, batch_size, permutate):
+    seqs = data_l[0]
+    labels = data_l[1]
+
+    if permutate:
+        all_input = list(zip(seqs, labels))
+
+        random.shuffle(all_input)
+        seqs, labels = list(zip(*all_input))
+
+    data_size = len(labels)
+    num_batches = int((data_size - 1.) / batch_size) + 1
+
+    batches = []
+    for batch_num in range(num_batches):
+        e = min((batch_num + 1) * batch_size, data_size)
+        s = e - batch_size
+        assert (s >= 0)
+
+        labels_vec = np.array(labels[s:e], dtype=np.int32)
+
+        text_lengths = np.array([len(seq) for seq in seqs[s:e]])
+        max_text_len = np.max(text_lengths)
+        min_text_len = np.min(text_lengths)
+        assert (min_text_len > 0)
+        text_matrix = np.zeros([max_text_len, batch_size], dtype=np.int32)
+
+        for i, seq in enumerate(seqs[s:e]):
+            for j, elem in enumerate(seq):
+                text_matrix[j, i] = elem
+
+        one_batch = [text_matrix, text_lengths, labels_vec]
+        batches.append(one_batch)
+    return batches
+
 """utils"""
 def safe_exp(value):
   """Exponentiation with catching of overflow error."""
@@ -154,6 +219,30 @@ def generate_graph():
     with open('miscellanies/graphpb.txt', 'w') as f:
         f.write(graphpb_txt)
     exit(0)
+
+class Printer(object):
+    def __init__(self, f):
+        self.log_f = f
+
+    def __call__(self, s, new_line=True):
+        now = strftime("%m-%d %H:%M:%S", gmtime())
+        s += "\t\t" + now
+        self.log_f.write(s)
+        if new_line:
+            self.log_f.write("\n")
+        self.log_f.flush()
+
+        # stdout
+        print(s, end="", file=sys.stdout)
+        if new_line:
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    def put_eval(self, recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name):
+        self("%s: " % name, new_line=False, f=self.log_f)
+        format_string = '\trecon/kl/bow-loss/ppl:\t%.3f\t%.3f\t%.3f\t%.3f\tBLEU:' + '\t%.1f' * 5
+        format_tuple = (recon_loss, kl_loss, bow_loss, ppl, bleu_score) + tuple(precisions_list)
+        self(format_string % format_tuple, f=self.log_f)
 
 def print_out(s, f=None, new_line=True):
   """Similar to print but with support to flush and output to a file."""

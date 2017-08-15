@@ -1,13 +1,6 @@
 import tensorflow as tf
 import numpy as np
-import argparse
-from time import gmtime, strftime
-from os import makedirs
-from os.path import join, dirname
-import json
 
-from helpers import build_vocab, build_data, build_emoji_index, batch_generator
-from helpers import print_out
 from emoji_reader import emoji_64
 from model_helpers import Embedding, xavier, build_bidirectional_rnn
 
@@ -20,7 +13,7 @@ class EmojiClassifier(object):
                  num_unit,
                  num_gpu,
                  lr=0.001,
-                 dropout=0.2,
+                 dropout=0.,
                  cell_type=tf.nn.rnn_cell.GRUCell
                  ):
         self.dropout = dropout
@@ -127,31 +120,30 @@ def map_emoji(word_indices, emoji_index_dict):
     return np.array([emoji_index_dict[index] for index in word_indices])
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
 
-    parser.add_argument("--num_epoch", type=int, required=True, )
-    parser.add_argument("--test_step", type=int, required=True, help="""\
-        output batch eval every *test_step*
-        output test eval every 10 x *test_step*
-        output train eval every epoch""")
-    parser.add_argument("--input_dir", type=str, required=True)
-    parser.add_argument("--log_fname", type=str, default="log")
+    import argparse
+    from time import gmtime, strftime
+    from os import makedirs, chdir
+    from os.path import join, dirname
+    import json
 
-    FLAGS, _ = parser.parse_known_args()
+    from helpers import build_vocab, build_data, build_emoji_index, batch_generator
+    from helpers import print_out
 
-    input_dir = FLAGS.input_dir
+    num_epoch = 3
+    test_step = 50
+
+    chdir("../data/full_64_input")
     output_dir = join("classify", strftime("%m-%d_%H-%M-%S", gmtime()))
-    output_dir = join(input_dir, output_dir)
 
-    vocab_f = join(input_dir, "vocab.ori")
-    train_ori_f = join(input_dir, "train.ori")
-    train_rep_f = join(input_dir, "train.rep")
-    test_ori_f = join(input_dir, "test.ori")
-    test_rep_f = join(input_dir, "test.rep")
+    vocab_f = "vocab.ori"
+    train_ori_f = "train.ori"
+    train_rep_f = "train.rep"
+    test_ori_f = "test.ori"
+    test_rep_f = "test.rep"
 
     makedirs(dirname(join(output_dir, "breakpoints/")), exist_ok=True)
-    # TODO: store hparams of classifier
-    log_f = open(join(output_dir, "%s.log" % FLAGS.log_fname), "w")
+    log_f = open(join(output_dir, "log.txt"), "w")
 
     # build vocab
     word2index, index2word = build_vocab(vocab_f)
@@ -180,8 +172,8 @@ if __name__ == '__main__':
         start_epoch = best_epoch = 1
         best_loss = 1000.
         sess.run(tf.global_variables_initializer())
-
-        for epoch in range(start_epoch, FLAGS.num_epoch + 1):
+        # saver.restore(sess, "classify/08-09_21-30-45/breakpoints/best_test_loss.ckpt")
+        for epoch in range(start_epoch, num_epoch + 1):
             train_batches = batch_generator(
                 train_data, start_i, end_i, batch_size)
 
@@ -194,13 +186,13 @@ if __name__ == '__main__':
                 accuracy_l.append(accuracy)
                 accuracy5_l.append(accuracy5)
 
-                if global_step % FLAGS.test_step == 0:
+                if global_step % test_step == 0:
                     time_now = strftime("%m-%d %H:%M:%S", gmtime())
                     print_out('epoch:\t%d\tstep:\t%d\tbatch-loss/accuracy/accuracy5:\t%.3f\t%.1f\t%.1f\t\t%s' %
                               (epoch, global_step,
                                np.mean(loss_l), np.mean(accuracy_l) * 100, np.mean(accuracy5_l) * 100, time_now),
                               f=log_f)
-                if global_step % (FLAGS.test_step * 10) == 0:
+                if global_step % (test_step * 10) == 0:
                     loss, accuracy, accuracy5 = classifier.eval(test_batches, sess)
                     print_out('EPOCH-\t%d\tSTEP-\t%d\tTEST-loss/accuracy/accuracy5-\t%.3f\t%.1f\t%.1f' %
                               (epoch, global_step,

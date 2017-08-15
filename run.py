@@ -18,7 +18,7 @@ from os.path import join, dirname
 from math import tanh
 
 import argparse
-from model import CVAE, Embedding
+from cvae import CVAE
 
 def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name, f):
     print_out("%s: " % name, new_line=False, f=f)

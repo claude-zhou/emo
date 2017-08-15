@@ -334,3 +334,183 @@ class CVAE(object):
         _, recon_loss, kl_loss, bow_loss = sess.run(
             [self.update_step, self.recon_loss, self.kl_loss, self.bow_loss], feed_dict=feed_dict)
         return recon_loss, kl_loss, bow_loss
+
+if __name__ == '__main__':
+
+    from helpers import build_data, batch_generator, print_out, build_vocab
+    import json
+    from time import gmtime, strftime
+    from os import makedirs, chdir
+    from os.path import join, dirname
+    from math import tanh
+    import argparse
+
+    def put_eval(recon_loss, kl_loss, bow_loss, ppl, bleu_score, precisions_list, name, f):
+        print_out("%s: " % name, new_line=False, f=f)
+        format_string = '\trecon/kl/bow-loss/ppl:\t%.3f\t%.3f\t%.3f\t%.3f\tBLEU:' + '\t%.1f' * 5
+        format_tuple = (recon_loss, kl_loss, bow_loss, ppl, bleu_score) + tuple(precisions_list)
+        print_out(format_string % format_tuple, f=f)
+
+
+    def write_out(file, corpus):
+        with open(file, 'w', encoding="utf-8") as f:
+            for seq in corpus:
+                to_write = ''
+                for index in seq:
+                    to_write += index2word[index] + ' '
+                f.write(to_write + '\n')
+
+
+    def save_best(file, best_bleu, best_epoch, best_step):
+        best_dict = {"bleu": best_bleu, "epoch": best_epoch, "step": best_step}
+        with open(file, "w") as f:
+            f.write(json.dumps(best_dict, indent=2))
+
+
+    def restore_best(file):
+        with open(file) as f:
+            best_dict = json.load(f)
+            best_bleu, best_epoch, best_step = best_dict["bleu"], best_dict["epoch"], best_dict["step"]
+        return best_bleu, best_epoch, best_step
+
+    cvae_parser = argparse.ArgumentParser()
+    cvae_parser.add_argument("--init_from_dir", type=str, default="")
+
+    # hyper params for running the graph
+
+    cvae_parser.add_argument("--is_seq2seq", action="store_true", help="""\
+            CVAE model or vanilla seq2seq with similar settings""")
+
+    FLAGS, _ = cvae_parser.parse_known_args()
+
+    from params.full import *
+    num_epoch = 6
+    test_step = 50
+
+    """directories"""
+    chdir('../data/full_64_input')
+    output_dir = strftime("seq2seq/%m-%d_%H-%M-%S", gmtime())
+    train_out_f = "train.out"
+    test_out_f = "test.out"
+    vocab_f = "vocab.ori"
+    train_ori_f = "train.ori"
+    train_rep_f = "train.rep"
+    test_ori_f = "test.ori"
+    test_rep_f = "test.rep"
+
+    makedirs(dirname(join(output_dir, "breakpoints/")), exist_ok=True)
+
+    log_f = open(join(output_dir, "log.txt"), "w")
+
+    # build vocab
+    word2index, index2word = build_vocab(vocab_f)
+    start_i, end_i = word2index['<s>'], word2index['</s>']
+    vocab_size = len(word2index)
+
+    # building graph
+    cvae = CVAE(vocab_size, embed_size, num_unit, latent_dim, emoji_dim, batch_size,
+                1, 1, decoder_layer,
+                start_i, end_i, beam_width, maximum_iterations, max_gradient_norm, lr, dropout, num_gpu, cell_type,
+                FLAGS.is_seq2seq)
+
+    # building data
+    train_data = build_data(train_ori_f, train_rep_f, word2index)
+
+    test_data = build_data(test_ori_f, test_rep_f, word2index)
+    test_batches = batch_generator(
+        test_data, start_i, end_i, batch_size, permutate=False)
+
+    print_out("*** DATA READY ***")
+
+    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        total_step = (num_epoch * len(train_data[0]) / batch_size)
+
+        best_f = join(output_dir, "best_bleu.txt")
+        global_step = best_step = 1
+        start_epoch = best_epoch = 1
+        best_bleu = 0.
+
+        # "seq2seq/08-13_17-25-50"
+        if FLAGS.init_from_dir == "":
+            sess.run(tf.global_variables_initializer())
+        else:
+            recover_dir = FLAGS.init_from_dir
+            best_dir = join(recover_dir, "breakpoints/best_test_bleu.ckpt")
+            saver.restore(sess, best_dir)
+
+        # generate_graph()
+        for epoch in range(start_epoch, num_epoch + 1):
+            train_batches = batch_generator(
+                train_data, start_i, end_i, batch_size)
+
+            recon_l = []
+            kl_l = []
+            bow_l = []
+            for batch in train_batches:
+                """ TRAIN """
+                kl_weight = 1
+                recon_loss, kl_loss, bow_loss = cvae.train_update(batch, sess, kl_weight)
+                recon_l.append(recon_loss)
+                kl_l.append(kl_loss)
+                bow_l.append(bow_loss)
+
+                if global_step % test_step == 0:
+                    time_now = strftime("%m-%d %H:%M:%S", gmtime())
+                    print_out('epoch:\t%d\tstep:\t%d\tbatch-recon/kl/bow-loss:\t%.3f\t%.3f\t%.3f\t\t%s' %
+                              (epoch, global_step, np.mean(recon_l), np.mean(kl_l), np.mean(bow_l), time_now), f=log_f)
+                    recon_l = []
+                    kl_l = []
+                    bow_l = []
+                if global_step % (test_step * 10) == 0:
+                    """ EVAL and INFER """
+
+                    # TEST
+                    (test_recon_loss, test_kl_loss, test_bow_loss,
+                     perplexity, test_bleu_score, precisions, _) = cvae.infer_and_eval(test_batches, sess)
+                    print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False, f=log_f)
+                    put_eval(
+                        test_recon_loss, test_kl_loss, test_bow_loss,
+                        perplexity, test_bleu_score, precisions, "TEST", log_f)
+
+                    # get down best
+                    if test_bleu_score >= best_bleu and kl_weight == 1.:
+                        best_bleu = test_bleu_score
+                    # if train_bleu_score >= best_bleu:  # TODO: train or test?
+                    #     best_bleu = train_bleu_score
+                        best_epoch = epoch
+                        best_step = global_step
+
+                        path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
+                        save_path = saver.save(sess, path)
+                        # save best epoch/step
+                        save_best(best_f, best_bleu, best_epoch, best_step)
+                global_step += 1
+
+            # TRAIN
+            (train_recon_loss, train_kl_loss, train_bow_loss,
+             perplexity, train_bleu_score, precisions, _) = cvae.infer_and_eval(train_batches, sess)
+            print_out("EPOCH:\t%d\tSTEP:\t%d\t" % (epoch, global_step), new_line=False, f=log_f)
+            put_eval(
+                train_recon_loss, train_kl_loss, train_bow_loss,
+                perplexity, train_bleu_score, precisions, "TRAIN", log_f)
+
+        """RESTORE BEST MODEL"""
+        path = join(output_dir, "breakpoints/best_test_bleu.ckpt")
+        saver.restore(sess, path)
+
+        """GENERATE"""
+        # TRAIN SET
+        train_batches = batch_generator(
+            train_data, start_i, end_i, batch_size, permutate=False)
+        (train_recon_loss, train_kl_loss, train_bow_loss,
+         perplexity, train_bleu_score, precisions, generation_corpus) = cvae.infer_and_eval(train_batches, sess)
+        write_out(train_out_f, generation_corpus)
+        print_out("BEST TRAIN BLEU: %.1f" % train_bleu_score, f=log_f)
+
+        # TEST SET
+        generation_corpus = cvae.infer_and_eval(test_batches, sess)[-1]
+        write_out(test_out_f, generation_corpus)
+
+    log_f.close()
+
